@@ -33,13 +33,28 @@ impl Default for MD041FirstLineHeading {
     }
 }
 
-/// Analysis result for fix eligibility (internal helper)
-struct FixAnalysis {
-    front_matter_end_idx: usize,
-    heading_idx: usize,
-    is_setext: bool,
-    current_level: usize,
-    needs_level_fix: bool,
+/// How to make this document compliant with MD041 (internal helper)
+enum FixPlan {
+    /// Move an existing heading to the top (after front matter), optionally releveling it.
+    MoveOrRelevel {
+        front_matter_end_idx: usize,
+        heading_idx: usize,
+        is_setext: bool,
+        current_level: usize,
+        needs_level_fix: bool,
+    },
+    /// Promote the first plain-text title line to a level-N heading, moving it to the top.
+    PromotePlainText {
+        front_matter_end_idx: usize,
+        title_line_idx: usize,
+        title_text: String,
+    },
+    /// Insert a heading derived from the source filename at the top of the document.
+    /// Used when the document contains only directive blocks and no heading or title line.
+    InsertDerived {
+        front_matter_end_idx: usize,
+        derived_title: String,
+    },
 }
 
 impl MD041FirstLineHeading {
@@ -214,6 +229,73 @@ impl MD041FirstLineHeading {
         }
     }
 
+    /// Returns true if `text` looks like a document title rather than a body paragraph.
+    ///
+    /// Criteria:
+    /// - Non-empty and ≤80 characters
+    /// - Does not end with sentence-ending punctuation (. ? ! : ;)
+    /// - Not a Markdown structural element (heading, list, blockquote)
+    /// - Followed by a blank line or EOF (visually separated from body text)
+    fn is_title_candidate(text: &str, next_is_blank_or_eof: bool) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+
+        if !next_is_blank_or_eof {
+            return false;
+        }
+
+        if text.len() > 80 {
+            return false;
+        }
+
+        let last_char = text.chars().next_back().unwrap_or(' ');
+        if matches!(last_char, '.' | '?' | '!' | ':' | ';') {
+            return false;
+        }
+
+        // Already a heading or structural Markdown element
+        if text.starts_with('#')
+            || text.starts_with("- ")
+            || text.starts_with("* ")
+            || text.starts_with("+ ")
+            || text.starts_with("> ")
+        {
+            return false;
+        }
+
+        true
+    }
+
+    /// Derive a title string from the source file's stem.
+    /// Converts kebab-case and underscores to Title Case words.
+    /// Returns None when no source file is available.
+    fn derive_title(ctx: &crate::lint_context::LintContext) -> Option<String> {
+        let stem = ctx
+            .source_file
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())?;
+
+        let title: String = stem
+            .split(['-', '_'])
+            .filter(|w| !w.is_empty())
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => {
+                        let upper: String = first.to_uppercase().collect();
+                        upper + chars.as_str()
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        if title.is_empty() { None } else { Some(title) }
+    }
+
     /// Check if a line is an HTML heading using the centralized HTML parser
     fn is_html_heading(ctx: &crate::lint_context::LintContext, first_line_idx: usize, level: usize) -> bool {
         // Check for single-line HTML heading using regex (fast path)
@@ -264,9 +346,8 @@ impl MD041FirstLineHeading {
         false
     }
 
-    /// Analyze document to determine if it can be fixed and gather metadata.
-    /// Returns None if not fixable, Some(analysis) if fixable.
-    fn analyze_for_fix(&self, ctx: &crate::lint_context::LintContext) -> Option<FixAnalysis> {
+    /// Analyze the document to determine how (if at all) it can be auto-fixed.
+    fn analyze_for_fix(&self, ctx: &crate::lint_context::LintContext) -> Option<FixPlan> {
         if ctx.lines.is_empty() {
             return None;
         }
@@ -282,15 +363,24 @@ impl MD041FirstLineHeading {
         }
 
         let is_mkdocs = ctx.flavor == crate::config::MarkdownFlavor::MkDocs;
-        let mut has_non_preamble_before_heading = false;
 
-        for (idx, line_info) in ctx.lines.iter().enumerate().skip(front_matter_end_idx) {
+        // (idx, is_setext, current_level) of the first ATX/Setext heading found
+        let mut found_heading: Option<(usize, bool, usize)> = None;
+        // First non-preamble, non-directive line that looks like a title
+        let mut first_title_candidate: Option<(usize, String)> = None;
+        // True once we see a non-preamble, non-directive line that is NOT a title candidate
+        let mut found_non_title_content = false;
+        // True when any non-directive, non-preamble line is encountered
+        let mut saw_non_directive_content = false;
+
+        'scan: for (idx, line_info) in ctx.lines.iter().enumerate().skip(front_matter_end_idx) {
             let line_content = line_info.content(ctx.content);
             let trimmed = line_content.trim();
 
-            // Check if this is preamble (skip these)
+            // Preamble: invisible/structural tokens that don't count as content
             let is_preamble = trimmed.is_empty()
                 || line_info.in_html_comment
+                || line_info.in_html_block
                 || Self::is_non_content_line(line_content)
                 || (is_mkdocs && is_mkdocs_anchor_line(line_content))
                 || line_info.in_kramdown_extension_block
@@ -300,37 +390,82 @@ impl MD041FirstLineHeading {
                 continue;
             }
 
-            // Check for ATX or Setext heading (not HTML heading - we can't fix those)
+            // Directive blocks (admonitions, content tabs, Quarto/Pandoc divs, PyMdown Blocks)
+            // are structural containers, not narrative content.
+            let is_directive_block = line_info.in_admonition
+                || line_info.in_content_tab
+                || line_info.in_quarto_div
+                || line_info.is_div_marker
+                || line_info.in_pymdown_block;
+
+            if !is_directive_block {
+                saw_non_directive_content = true;
+            }
+
+            // ATX or Setext heading (HTML headings cannot be moved/converted)
             if let Some(heading) = &line_info.heading {
-                // Can't fix if there's non-preamble content before the heading
-                if has_non_preamble_before_heading {
-                    return None;
-                }
-
                 let is_setext = matches!(heading.style, HeadingStyle::Setext1 | HeadingStyle::Setext2);
-                let current_level = heading.level as usize;
-                let needs_level_fix = current_level != self.level;
-                let needs_move = idx > front_matter_end_idx;
+                found_heading = Some((idx, is_setext, heading.level as usize));
+                break 'scan;
+            }
 
-                // Only return analysis if there's something to fix
-                if needs_level_fix || needs_move {
-                    return Some(FixAnalysis {
-                        front_matter_end_idx,
-                        heading_idx: idx,
-                        is_setext,
-                        current_level,
-                        needs_level_fix,
-                    });
+            // Track non-heading, non-directive content for PromotePlainText detection
+            if !is_directive_block && !found_non_title_content && first_title_candidate.is_none() {
+                let next_is_blank_or_eof = ctx
+                    .lines
+                    .get(idx + 1)
+                    .is_none_or(|l| l.content(ctx.content).trim().is_empty());
+
+                if Self::is_title_candidate(trimmed, next_is_blank_or_eof) {
+                    first_title_candidate = Some((idx, trimmed.to_string()));
                 } else {
-                    return None; // Already correct
+                    found_non_title_content = true;
                 }
-            } else {
-                // Non-heading, non-preamble content found before any heading
-                has_non_preamble_before_heading = true;
             }
         }
 
-        // No ATX/Setext heading found
+        if let Some((h_idx, is_setext, current_level)) = found_heading {
+            // Heading exists. Can we move/relevel it?
+            // If real content or a title candidate appeared before it, the heading is not the
+            // first significant element - reordering would change document meaning.
+            if found_non_title_content || first_title_candidate.is_some() {
+                return None;
+            }
+
+            let needs_level_fix = current_level != self.level;
+            let needs_move = h_idx > front_matter_end_idx;
+
+            if needs_level_fix || needs_move {
+                return Some(FixPlan::MoveOrRelevel {
+                    front_matter_end_idx,
+                    heading_idx: h_idx,
+                    is_setext,
+                    current_level,
+                    needs_level_fix,
+                });
+            }
+            return None; // Already at the correct position and level
+        }
+
+        // No heading found. Try to create one.
+
+        if let Some((title_idx, title_text)) = first_title_candidate {
+            return Some(FixPlan::PromotePlainText {
+                front_matter_end_idx,
+                title_line_idx: title_idx,
+                title_text,
+            });
+        }
+
+        // Document has no heading and no title candidate. If it contains only directive
+        // blocks (plus preamble), we can insert a heading derived from the filename.
+        if !saw_non_directive_content && let Some(derived_title) = Self::derive_title(ctx) {
+            return Some(FixPlan::InsertDerived {
+                front_matter_end_idx,
+                derived_title,
+            });
+        }
+
         None
     }
 
@@ -448,65 +583,101 @@ impl Rule for MD041FirstLineHeading {
     }
 
     fn fix(&self, ctx: &crate::lint_context::LintContext) -> Result<String, LintError> {
-        // Only fix if explicitly enabled via config
         if !self.fix_enabled {
             return Ok(ctx.content.to_string());
         }
 
-        // Skip if should_skip returns true (front matter title, empty content, etc.)
         if self.should_skip(ctx) {
             return Ok(ctx.content.to_string());
         }
 
-        // Use shared analysis to determine what needs fixing
-        let Some(analysis) = self.analyze_for_fix(ctx) else {
+        let Some(plan) = self.analyze_for_fix(ctx) else {
             return Ok(ctx.content.to_string());
         };
 
         let lines = ctx.raw_lines();
-        let heading_idx = analysis.heading_idx;
-        let front_matter_end_idx = analysis.front_matter_end_idx;
-        let is_setext = analysis.is_setext;
 
-        let heading_info = &ctx.lines[heading_idx];
-        let heading_line = heading_info.content(ctx.content);
-
-        // Prepare the heading (fix level if needed, always convert Setext to ATX)
-        let fixed_heading = if analysis.needs_level_fix || is_setext {
-            self.fix_heading_level(heading_line, analysis.current_level, self.level)
-        } else {
-            heading_line.to_string()
-        };
-
-        // Build the result
         let mut result = String::new();
+        let preserve_trailing_newline = ctx.content.ends_with('\n');
 
-        // Add front matter if present
-        for line in lines.iter().take(front_matter_end_idx) {
-            result.push_str(line);
-            result.push('\n');
+        match plan {
+            FixPlan::MoveOrRelevel {
+                front_matter_end_idx,
+                heading_idx,
+                is_setext,
+                current_level,
+                needs_level_fix,
+            } => {
+                let heading_line = ctx.lines[heading_idx].content(ctx.content);
+                let fixed_heading = if needs_level_fix || is_setext {
+                    self.fix_heading_level(heading_line, current_level, self.level)
+                } else {
+                    heading_line.to_string()
+                };
+
+                for line in lines.iter().take(front_matter_end_idx) {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+                result.push_str(&fixed_heading);
+                result.push('\n');
+                for (idx, line) in lines.iter().enumerate().skip(front_matter_end_idx) {
+                    if idx == heading_idx {
+                        continue;
+                    }
+                    if is_setext && idx == heading_idx + 1 {
+                        continue;
+                    }
+                    result.push_str(line);
+                    result.push('\n');
+                }
+            }
+
+            FixPlan::PromotePlainText {
+                front_matter_end_idx,
+                title_line_idx,
+                title_text,
+            } => {
+                let hashes = "#".repeat(self.level);
+                let new_heading = format!("{hashes} {title_text}");
+
+                for line in lines.iter().take(front_matter_end_idx) {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+                result.push_str(&new_heading);
+                result.push('\n');
+                for (idx, line) in lines.iter().enumerate().skip(front_matter_end_idx) {
+                    if idx == title_line_idx {
+                        continue;
+                    }
+                    result.push_str(line);
+                    result.push('\n');
+                }
+            }
+
+            FixPlan::InsertDerived {
+                front_matter_end_idx,
+                derived_title,
+            } => {
+                let hashes = "#".repeat(self.level);
+                let new_heading = format!("{hashes} {derived_title}");
+
+                for line in lines.iter().take(front_matter_end_idx) {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+                result.push_str(&new_heading);
+                result.push('\n');
+                result.push('\n');
+                for line in lines.iter().skip(front_matter_end_idx) {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+            }
         }
 
-        // Add the heading right after front matter
-        result.push_str(&fixed_heading);
-        result.push('\n');
-
-        // Add remaining content, skipping the original heading line and Setext underline
-        for (idx, line) in lines.iter().enumerate().skip(front_matter_end_idx) {
-            // Skip the original heading line
-            if idx == heading_idx {
-                continue;
-            }
-            // Skip the Setext underline (line after heading)
-            if is_setext && idx == heading_idx + 1 {
-                continue;
-            }
-            result.push_str(line);
-            result.push('\n');
-        }
-
-        // Remove trailing newline if original didn't have one
-        if !ctx.content.ends_with('\n') && result.ends_with('\n') {
+        if !preserve_trailing_newline && result.ends_with('\n') {
             result.pop();
         }
 
@@ -1724,5 +1895,357 @@ mod tests {
             warnings[0].fix.is_none(),
             "Document with content before heading should not be claimed as fixable"
         );
+    }
+
+    // ── Phase 1 (Case C): HTML blocks treated as preamble ──────────────────────
+
+    #[test]
+    fn test_fix_html_block_before_heading_is_now_fixable() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        // HTML block (badges div) before the real heading – was unfixable before Phase 1
+        let content = "<div>\n  Some HTML\n</div>\n\n# My Document\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(warnings.len(), 1, "Warning should fire because first line is HTML");
+        assert!(
+            warnings[0].fix.is_some(),
+            "Should be fixable: heading exists after HTML block preamble"
+        );
+
+        let fixed = rule.fix(&ctx).unwrap();
+        assert!(
+            fixed.starts_with("# My Document\n"),
+            "Heading should be moved to the top, got: {fixed}"
+        );
+    }
+
+    #[test]
+    fn test_fix_html_block_wrong_level_before_heading() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        let content = "<div>\n  badge\n</div>\n\n## Wrong Level\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert!(
+            fixed.starts_with("# Wrong Level\n"),
+            "Heading should be fixed to level 1 and moved to top, got: {fixed}"
+        );
+    }
+
+    // ── Phase 2 (Case A): PromotePlainText ──────────────────────────────────────
+
+    #[test]
+    fn test_fix_promote_plain_text_title() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        let content = "My Project\n\nSome content.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(warnings.len(), 1, "Should warn: first line is not a heading");
+        assert!(
+            warnings[0].fix.is_some(),
+            "Should be fixable: first line is a title candidate"
+        );
+
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(
+            fixed, "# My Project\n\nSome content.\n",
+            "Title line should be promoted to heading"
+        );
+    }
+
+    #[test]
+    fn test_fix_promote_plain_text_title_with_front_matter() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        let content = "---\nauthor: John\n---\n\nMy Project\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert!(
+            fixed.starts_with("---\nauthor: John\n---\n# My Project\n"),
+            "Title should be promoted and placed right after front matter, got: {fixed}"
+        );
+    }
+
+    #[test]
+    fn test_fix_no_promote_ends_with_period() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        // Sentence-ending punctuation → NOT a title candidate
+        let content = "This is a sentence.\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(fixed, content, "Sentence-ending line should not be promoted");
+
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(warnings[0].fix.is_none(), "No fix should be offered");
+    }
+
+    #[test]
+    fn test_fix_no_promote_ends_with_colon() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        let content = "Note:\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(fixed, content, "Colon-ending line should not be promoted");
+    }
+
+    #[test]
+    fn test_fix_no_promote_if_too_long() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        // >80 chars → not a title candidate
+        let long_line = "A".repeat(81);
+        let content = format!("{long_line}\n\nContent.\n");
+        let ctx = LintContext::new(&content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(fixed, content, "Lines over 80 chars should not be promoted");
+    }
+
+    #[test]
+    fn test_fix_no_promote_if_no_blank_after() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        // No blank line after potential title → NOT a title candidate
+        let content = "My Project\nImmediately continues.\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(fixed, content, "Line without following blank should not be promoted");
+    }
+
+    #[test]
+    fn test_fix_no_promote_when_heading_exists_after_title_candidate() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        // Title candidate exists but so does a heading later → can't safely fix
+        // (the title candidate is content before the heading)
+        let content = "My Project\n\n# Actual Heading\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(
+            fixed, content,
+            "Should not fix when title candidate exists before a heading"
+        );
+
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(warnings[0].fix.is_none(), "No fix should be offered");
+    }
+
+    #[test]
+    fn test_fix_promote_title_at_eof_no_trailing_newline() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        // Single title line at EOF with no trailing newline
+        let content = "My Project";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(fixed, "# My Project", "Should promote title at EOF");
+    }
+
+    // ── Phase 3 (Case B): InsertDerived ─────────────────────────────────────────
+
+    #[test]
+    fn test_fix_insert_derived_directive_only_document() {
+        use crate::rule::Rule;
+        use std::path::PathBuf;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        // Document with only a note admonition and no heading
+        // (LintContext constructed with a source file path for title derivation)
+        let content = "!!! note\n    This is a note.\n";
+        let ctx = LintContext::new(
+            content,
+            crate::config::MarkdownFlavor::MkDocs,
+            Some(PathBuf::from("setup-guide.md")),
+        );
+
+        let can_fix = rule.can_fix(&ctx);
+        assert!(can_fix, "Directive-only document with source file should be fixable");
+
+        let fixed = rule.fix(&ctx).unwrap();
+        assert!(
+            fixed.starts_with("# Setup Guide\n"),
+            "Should insert derived heading, got: {fixed}"
+        );
+    }
+
+    #[test]
+    fn test_fix_no_insert_derived_without_source_file() {
+        use crate::rule::Rule;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        // No source_file → derive_title returns None → InsertDerived unavailable
+        let content = "!!! note\n    This is a note.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::MkDocs, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(fixed, content, "Without a source file, cannot derive a title");
+    }
+
+    #[test]
+    fn test_fix_no_insert_derived_when_has_real_content() {
+        use crate::rule::Rule;
+        use std::path::PathBuf;
+        let rule = MD041FirstLineHeading {
+            level: 1,
+            front_matter_title: false,
+            front_matter_title_pattern: None,
+            fix_enabled: true,
+        };
+
+        // Document has real paragraph content in addition to directive blocks
+        let content = "!!! note\n    A note.\n\nSome paragraph text.\n";
+        let ctx = LintContext::new(
+            content,
+            crate::config::MarkdownFlavor::MkDocs,
+            Some(PathBuf::from("guide.md")),
+        );
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(
+            fixed, content,
+            "Should not insert derived heading when real content is present"
+        );
+    }
+
+    #[test]
+    fn test_derive_title_converts_kebab_case() {
+        use std::path::PathBuf;
+        let ctx = LintContext::new(
+            "",
+            crate::config::MarkdownFlavor::Standard,
+            Some(PathBuf::from("my-setup-guide.md")),
+        );
+        let title = MD041FirstLineHeading::derive_title(&ctx);
+        assert_eq!(title, Some("My Setup Guide".to_string()));
+    }
+
+    #[test]
+    fn test_derive_title_converts_underscores() {
+        use std::path::PathBuf;
+        let ctx = LintContext::new(
+            "",
+            crate::config::MarkdownFlavor::Standard,
+            Some(PathBuf::from("api_reference.md")),
+        );
+        let title = MD041FirstLineHeading::derive_title(&ctx);
+        assert_eq!(title, Some("Api Reference".to_string()));
+    }
+
+    #[test]
+    fn test_derive_title_none_without_source_file() {
+        let ctx = LintContext::new("", crate::config::MarkdownFlavor::Standard, None);
+        let title = MD041FirstLineHeading::derive_title(&ctx);
+        assert_eq!(title, None);
+    }
+
+    #[test]
+    fn test_is_title_candidate_basic() {
+        assert!(MD041FirstLineHeading::is_title_candidate("My Project", true));
+        assert!(MD041FirstLineHeading::is_title_candidate("Getting Started", true));
+        assert!(MD041FirstLineHeading::is_title_candidate("API Reference", true));
+    }
+
+    #[test]
+    fn test_is_title_candidate_rejects_sentence_punctuation() {
+        assert!(!MD041FirstLineHeading::is_title_candidate("This is a sentence.", true));
+        assert!(!MD041FirstLineHeading::is_title_candidate("Is this correct?", true));
+        assert!(!MD041FirstLineHeading::is_title_candidate("Note:", true));
+        assert!(!MD041FirstLineHeading::is_title_candidate("Stop!", true));
+        assert!(!MD041FirstLineHeading::is_title_candidate("Step 1;", true));
+    }
+
+    #[test]
+    fn test_is_title_candidate_rejects_when_no_blank_after() {
+        assert!(!MD041FirstLineHeading::is_title_candidate("My Project", false));
+    }
+
+    #[test]
+    fn test_is_title_candidate_rejects_long_lines() {
+        let long = "A".repeat(81);
+        assert!(!MD041FirstLineHeading::is_title_candidate(&long, true));
+        // 80 chars is the boundary – exactly 80 is OK
+        let ok = "A".repeat(80);
+        assert!(MD041FirstLineHeading::is_title_candidate(&ok, true));
+    }
+
+    #[test]
+    fn test_is_title_candidate_rejects_structural_markdown() {
+        assert!(!MD041FirstLineHeading::is_title_candidate("# Heading", true));
+        assert!(!MD041FirstLineHeading::is_title_candidate("- list item", true));
+        assert!(!MD041FirstLineHeading::is_title_candidate("* bullet", true));
+        assert!(!MD041FirstLineHeading::is_title_candidate("> blockquote", true));
     }
 }
