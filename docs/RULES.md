@@ -175,6 +175,7 @@ Severity affects:
 | [MD030](md030.md) | List marker space         | Spaces after list markers                                 |
 | [MD032](md032.md) | Blanks around lists       | Lists should be surrounded by blank lines                 |
 | [MD069](md069.md) | No duplicate list markers | Duplicate markers like `- - text` from copy-paste         |
+| [MD076](md076.md) | List item spacing         | List item spacing should be consistent                    |
 
 ## Whitespace Rules
 

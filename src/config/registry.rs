@@ -229,6 +229,7 @@ pub static RULE_ALIAS_MAP: phf::Map<&'static str, &'static str> = phf::phf_map! 
     "MD073" => "MD073",
     "MD074" => "MD074",
     "MD075" => "MD075",
+    "MD076" => "MD076",
 
     // Aliases (hyphen format)
     "HEADING-INCREMENT" => "MD001",
@@ -303,6 +304,7 @@ pub static RULE_ALIAS_MAP: phf::Map<&'static str, &'static str> = phf::phf_map! 
     "TOC-VALIDATION" => "MD073",
     "MKDOCS-NAV" => "MD074",
     "ORPHANED-TABLE-ROWS" => "MD075",
+    "LIST-ITEM-SPACING" => "MD076",
 };
 
 /// Resolve a rule name alias to its canonical form with O(1) perfect hash lookup
