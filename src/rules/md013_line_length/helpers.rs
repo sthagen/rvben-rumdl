@@ -120,8 +120,17 @@ pub(crate) fn extract_list_marker_and_content(line: &str) -> (String, String) {
                 && next == ' '
             {
                 marker_content.push(next);
-                // Trim trailing whitespace while preserving hard breaks
-                let content = trim_preserving_hard_break(chars.as_str());
+                let rest = chars.as_str();
+                // Check for GFM task list checkboxes
+                for checkbox in ["[ ] ", "[x] ", "[X] "] {
+                    if let Some(content) = rest.strip_prefix(checkbox) {
+                        return (
+                            format!("{indent}{marker_content}{checkbox}"),
+                            trim_preserving_hard_break(content),
+                        );
+                    }
+                }
+                let content = trim_preserving_hard_break(rest);
                 return (format!("{indent}{marker_content}"), content);
             }
             break;
@@ -225,33 +234,22 @@ pub(crate) fn is_standalone_link_or_image_line(line: &str) -> bool {
         s = rest.trim_start();
     }
 
-    // Strip list marker (bullet or ordered)
-    if let Some(rest) = s
-        .strip_prefix("- ")
-        .or_else(|| s.strip_prefix("* "))
-        .or_else(|| s.strip_prefix("+ "))
-    {
-        s = rest;
-    } else {
-        // Check for ordered list marker: digits followed by `. `
-        let digit_end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
-        if digit_end > 0 {
-            if let Some(rest) = s[digit_end..].strip_prefix(". ") {
-                s = rest;
-            }
-        }
+    // Strip list marker and task checkbox via shared utility
+    if is_list_item(s) {
+        let (_, content) = extract_list_marker_and_content(s);
+        return is_link_with_optional_emphasis(&content);
     }
 
-    // Strip task list checkbox (applies to both bullet and ordered lists)
-    if let Some(rest) = s
-        .strip_prefix("[ ] ")
-        .or_else(|| s.strip_prefix("[x] "))
-        .or_else(|| s.strip_prefix("[X] "))
-    {
-        s = rest;
-    }
+    is_link_with_optional_emphasis(s)
+}
 
-    s = s.trim_start();
+/// Check if content (after stripping list/blockquote markers) is a standalone link,
+/// optionally wrapped in emphasis.
+fn is_link_with_optional_emphasis(s: &str) -> bool {
+    let mut s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
 
     // Strip emphasis wrappers (up to 3 chars: *, **, ***, _, __, ___)
     let emphasis_chars: &[char] = &['*', '_'];
@@ -342,6 +340,23 @@ mod tests {
         assert_eq!(
             extract_list_marker_and_content("- regular item"),
             ("- ".to_string(), "regular item".to_string())
+        );
+        // Ordered list with task checkboxes
+        assert_eq!(
+            extract_list_marker_and_content("1. [ ] unchecked ordered"),
+            ("1. [ ] ".to_string(), "unchecked ordered".to_string())
+        );
+        assert_eq!(
+            extract_list_marker_and_content("1. [x] checked ordered"),
+            ("1. [x] ".to_string(), "checked ordered".to_string())
+        );
+        assert_eq!(
+            extract_list_marker_and_content("1. [X] checked upper ordered"),
+            ("1. [X] ".to_string(), "checked upper ordered".to_string())
+        );
+        assert_eq!(
+            extract_list_marker_and_content("99. [x] multi-digit ordered"),
+            ("99. [x] ".to_string(), "multi-digit ordered".to_string())
         );
     }
 
