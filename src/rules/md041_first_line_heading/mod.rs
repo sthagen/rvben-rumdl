@@ -271,13 +271,18 @@ impl MD041FirstLineHeading {
     /// Converts kebab-case and underscores to Title Case words.
     /// Returns None when no source file is available.
     fn derive_title(ctx: &crate::lint_context::LintContext) -> Option<String> {
-        let stem = ctx
-            .source_file
-            .as_ref()
-            .and_then(|p| p.file_stem())
-            .and_then(|s| s.to_str())?;
+        let path = ctx.source_file.as_ref()?;
+        let stem = path.file_stem().and_then(|s| s.to_str())?;
 
-        let title: String = stem
+        // For index/readme files, use the parent directory name instead.
+        // If no parent directory exists, return None — "Index" or "README" are not useful titles.
+        let effective_stem = if stem.eq_ignore_ascii_case("index") || stem.eq_ignore_ascii_case("readme") {
+            path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str())?
+        } else {
+            stem
+        };
+
+        let title: String = effective_stem
             .split(['-', '_'])
             .filter(|w| !w.is_empty())
             .map(|word| {
@@ -2209,6 +2214,68 @@ mod tests {
         let ctx = LintContext::new("", crate::config::MarkdownFlavor::Standard, None);
         let title = MD041FirstLineHeading::derive_title(&ctx);
         assert_eq!(title, None);
+    }
+
+    #[test]
+    fn test_derive_title_index_file_uses_parent_dir() {
+        use std::path::PathBuf;
+        let ctx = LintContext::new(
+            "",
+            crate::config::MarkdownFlavor::Standard,
+            Some(PathBuf::from("docs/getting-started/index.md")),
+        );
+        let title = MD041FirstLineHeading::derive_title(&ctx);
+        assert_eq!(title, Some("Getting Started".to_string()));
+    }
+
+    #[test]
+    fn test_derive_title_readme_file_uses_parent_dir() {
+        use std::path::PathBuf;
+        let ctx = LintContext::new(
+            "",
+            crate::config::MarkdownFlavor::Standard,
+            Some(PathBuf::from("my-project/README.md")),
+        );
+        let title = MD041FirstLineHeading::derive_title(&ctx);
+        assert_eq!(title, Some("My Project".to_string()));
+    }
+
+    #[test]
+    fn test_derive_title_index_without_parent_returns_none() {
+        use std::path::PathBuf;
+        // Root-level index.md has no meaningful parent — "Index" is not a useful title
+        let ctx = LintContext::new(
+            "",
+            crate::config::MarkdownFlavor::Standard,
+            Some(PathBuf::from("index.md")),
+        );
+        let title = MD041FirstLineHeading::derive_title(&ctx);
+        assert_eq!(title, None);
+    }
+
+    #[test]
+    fn test_derive_title_readme_without_parent_returns_none() {
+        use std::path::PathBuf;
+        let ctx = LintContext::new(
+            "",
+            crate::config::MarkdownFlavor::Standard,
+            Some(PathBuf::from("README.md")),
+        );
+        let title = MD041FirstLineHeading::derive_title(&ctx);
+        assert_eq!(title, None);
+    }
+
+    #[test]
+    fn test_derive_title_readme_case_insensitive() {
+        use std::path::PathBuf;
+        // Lowercase readme.md should also use parent dir
+        let ctx = LintContext::new(
+            "",
+            crate::config::MarkdownFlavor::Standard,
+            Some(PathBuf::from("docs/api/readme.md")),
+        );
+        let title = MD041FirstLineHeading::derive_title(&ctx);
+        assert_eq!(title, Some("Api".to_string()));
     }
 
     #[test]
