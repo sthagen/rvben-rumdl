@@ -320,7 +320,7 @@ impl MD063HeadingCapitalization {
 
         // Check if it's a lowercase word (articles, prepositions, etc.)
         if self.is_lowercase_word(word) {
-            return word.to_lowercase();
+            return Self::lowercase_preserving_composition(word);
         }
 
         // Regular word - capitalize first letter
@@ -347,23 +347,71 @@ impl MD063HeadingCapitalization {
 
     /// Capitalize the first letter of a word, handling Unicode properly
     fn capitalize_first(&self, word: &str) -> String {
-        let mut chars = word.chars();
-        match chars.next() {
-            None => String::new(),
-            Some(first) => {
-                let first_upper: String = first.to_uppercase().collect();
-                let rest: String = chars.collect();
-                format!("{}{}", first_upper, rest.to_lowercase())
-            }
+        if word.is_empty() {
+            return String::new();
         }
+
+        // Find the first alphabetic character to capitalize
+        let first_alpha_pos = word.find(|c: char| c.is_alphabetic());
+        let Some(pos) = first_alpha_pos else {
+            return word.to_string();
+        };
+
+        let prefix = &word[..pos];
+        let mut chars = word[pos..].chars();
+        let first = chars.next().unwrap();
+        // Use composition-preserving uppercase to avoid decomposing
+        // precomposed characters (e.g., ῷ → Ω + combining marks + Ι)
+        let first_upper = Self::uppercase_preserving_composition(&first.to_string());
+        let rest: String = chars.collect();
+        let rest_lower = Self::lowercase_preserving_composition(&rest);
+        format!("{prefix}{first_upper}{rest_lower}")
     }
 
-    /// Apply title case to text (using titlecase crate as base, then our customizations)
+    /// Lowercase a string character-by-character, preserving precomposed
+    /// characters that would decompose during case conversion.
+    fn lowercase_preserving_composition(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        for c in s.chars() {
+            let lower: String = c.to_lowercase().collect();
+            if lower.chars().count() == 1 {
+                result.push_str(&lower);
+            } else {
+                // Lowercasing would decompose this character; keep original
+                result.push(c);
+            }
+        }
+        result
+    }
+
+    /// Uppercase a string character-by-character, preserving precomposed
+    /// characters that would decompose during case conversion.
+    /// For example, ῷ (U+1FF7) would decompose into Ω + combining marks + Ι
+    /// via to_uppercase(); this function keeps ῷ unchanged instead.
+    fn uppercase_preserving_composition(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        for c in s.chars() {
+            let upper: String = c.to_uppercase().collect();
+            if upper.chars().count() == 1 {
+                result.push_str(&upper);
+            } else {
+                // Uppercasing would decompose this character; keep original
+                result.push(c);
+            }
+        }
+        result
+    }
+
+    /// Apply title case to text, using our own title-case logic.
+    /// We avoid the external titlecase crate because it decomposes
+    /// precomposed Unicode characters during case conversion.
     fn apply_title_case(&self, text: &str) -> String {
         let canonical_forms = self.proper_name_canonical_forms(text);
 
-        // Pre-compute byte position of each original word for canonical form lookup.
         let original_words: Vec<&str> = text.split_whitespace().collect();
+        let total_words = original_words.len();
+
+        // Pre-compute byte position of each word for canonical form lookup.
         let mut word_positions: Vec<usize> = Vec::with_capacity(original_words.len());
         let mut pos = 0;
         for word in &original_words {
@@ -375,12 +423,7 @@ impl MD063HeadingCapitalization {
             }
         }
 
-        // Use the titlecase crate for the base transformation
-        let base_result = titlecase::titlecase(text);
-        let transformed_words: Vec<&str> = base_result.split_whitespace().collect();
-        let total_words = transformed_words.len();
-
-        let result_words: Vec<String> = transformed_words
+        let result_words: Vec<String> = original_words
             .iter()
             .enumerate()
             .map(|(i, word)| {
@@ -389,25 +432,16 @@ impl MD063HeadingCapitalization {
 
                 // Words that are part of an MD044 proper name use the canonical form directly.
                 if let Some(&canonical) = word_positions.get(i).and_then(|&p| canonical_forms.get(&p)) {
-                    if let Some(original_word) = original_words.get(i) {
-                        return Self::apply_canonical_form_to_word(original_word, canonical);
-                    }
-                    return canonical.to_string();
+                    return Self::apply_canonical_form_to_word(word, canonical);
                 }
 
-                // Check if the ORIGINAL word should be preserved (for acronyms like "API")
-                if let Some(original_word) = original_words.get(i)
-                    && self.should_preserve_word(original_word)
-                {
-                    return (*original_word).to_string();
+                // Preserve words in ignore list or with internal capitals
+                if self.should_preserve_word(word) {
+                    return (*word).to_string();
                 }
 
                 // Handle hyphenated words
                 if word.contains('-') {
-                    // Also check original for hyphenated preservation
-                    if let Some(original_word) = original_words.get(i) {
-                        return self.handle_hyphenated_word_with_original(word, original_word, is_first, is_last);
-                    }
                     return self.handle_hyphenated_word(word, is_first, is_last);
                 }
 
@@ -427,39 +461,6 @@ impl MD063HeadingCapitalization {
             .iter()
             .enumerate()
             .map(|(i, part)| {
-                // First part of first word and last part of last word get special treatment
-                let part_is_first = is_first && i == 0;
-                let part_is_last = is_last && i == total_parts - 1;
-                self.title_case_word(part, part_is_first, part_is_last)
-            })
-            .collect();
-
-        result_parts.join("-")
-    }
-
-    /// Handle hyphenated words with original text for acronym preservation
-    fn handle_hyphenated_word_with_original(
-        &self,
-        word: &str,
-        original: &str,
-        is_first: bool,
-        is_last: bool,
-    ) -> String {
-        let parts: Vec<&str> = word.split('-').collect();
-        let original_parts: Vec<&str> = original.split('-').collect();
-        let total_parts = parts.len();
-
-        let result_parts: Vec<String> = parts
-            .iter()
-            .enumerate()
-            .map(|(i, part)| {
-                // Check if the original part should be preserved (for acronyms)
-                if let Some(original_part) = original_parts.get(i)
-                    && self.should_preserve_word(original_part)
-                {
-                    return (*original_part).to_string();
-                }
-
                 // First part of first word and last part of last word get special treatment
                 let part_is_first = is_first && i == 0;
                 let part_is_last = is_last && i == total_parts - 1;
@@ -503,10 +504,9 @@ impl MD063HeadingCapitalization {
                         // First word: capitalize first letter, lowercase rest
                         let mut chars = word.chars();
                         if let Some(first) = chars.next() {
-                            let first_upper: String = first.to_uppercase().collect();
-                            result.push_str(&first_upper);
+                            result.push_str(&Self::uppercase_preserving_composition(&first.to_string()));
                             let rest: String = chars.collect();
-                            result.push_str(&rest.to_lowercase());
+                            result.push_str(&Self::lowercase_preserving_composition(&rest));
                         }
                     }
                     is_first_word = false;
@@ -515,7 +515,7 @@ impl MD063HeadingCapitalization {
                     if self.should_preserve_word(word) {
                         result.push_str(word);
                     } else {
-                        result.push_str(&word.to_lowercase());
+                        result.push_str(&Self::lowercase_preserving_composition(word));
                     }
                 }
 
@@ -556,7 +556,7 @@ impl MD063HeadingCapitalization {
                 } else if self.should_preserve_word(word) {
                     result.push_str(word);
                 } else {
-                    result.push_str(&word.to_uppercase());
+                    result.push_str(&Self::uppercase_preserving_composition(word));
                 }
 
                 current_pos = abs_pos + word.len();
@@ -843,7 +843,7 @@ impl MD063HeadingCapitalization {
                 } else if self.should_preserve_word(word) {
                     result.push_str(word);
                 } else {
-                    result.push_str(&word.to_lowercase());
+                    result.push_str(&Self::lowercase_preserving_composition(word));
                 }
 
                 current_pos = abs_pos + word.len();

@@ -67,7 +67,6 @@ url = { version = "2", features = ["serde"] }
 unicode-normalization = "0.1"
 schemars = "1.1"
 unicode-width = "0.2"
-titlecase = "3"
 memory-stats = { version = "1.2.0", optional = true }
 phf = { version = "0.13", features = ["macros"] }
 

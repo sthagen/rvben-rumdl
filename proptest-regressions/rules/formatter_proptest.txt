@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 3d8e5452f67660cab20b3df513575253268fd2a7e18380b9f8b1faa051aeacfb # shrinks to content = "# \n### \n### "
+cc f6e0c7200ee15154b36de508ae536dbac883ca2a47319fe43aecd0e74c7cb2fa # shrinks to content = "[\\ῷ]()\n---"

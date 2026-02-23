@@ -46,8 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proper names ([#448](https://github.com/rvben/rumdl/issues/448))
 - **MD052**: Added missing `default_config_section` for config validation
   ([#451](https://github.com/rvben/rumdl/issues/451))
+- **MD063**: Precomposed Unicode characters (e.g., Greek `ῷ`) are no longer decomposed
+  during case conversion, fixing non-idempotent fix behavior
 
 ### Changed
+
+- **MD063**: Removed dependency on external `titlecase` crate; title case logic is now
+  fully handled by the built-in implementation
 
 - **MD013**: Refactored standalone link detection to reuse shared
   `extract_list_marker_and_content` utility, also fixing ordered list task checkbox
