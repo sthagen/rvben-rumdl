@@ -2,8 +2,10 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// Regex for standalone inline link/image: `[text](url)` or `![alt](url)`
-/// Handles escaped brackets in link text.
-static INLINE_LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^!?\[(?:[^\]\\]|\\.)*\]\([^)]*\)$").unwrap());
+/// Handles escaped brackets in link text and one level of balanced parentheses
+/// in URLs (e.g., Wikipedia links like `https://en.wikipedia.org/wiki/Foo_(bar)`).
+static INLINE_LINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^!?\[(?:[^\]\\]|\\.)*\]\((?:[^()]*\([^()]*\))*[^()]*\)$").unwrap());
 
 /// Regex for standalone reference-style link/image: `[text][ref]` or `![alt][ref]`
 static REF_LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^!?\[(?:[^\]\\]|\\.)*\]\[[^\]]*\]$").unwrap());
@@ -396,6 +398,11 @@ mod tests {
         ));
         // With leading whitespace
         assert!(is_standalone_link_or_image_line("  [text](https://example.com)"));
+        // URL with balanced parentheses (Wikipedia-style)
+        assert!(is_standalone_link_or_image_line(
+            "[Rust](https://en.wikipedia.org/wiki/Rust_(programming_language))"
+        ));
+        assert!(is_standalone_link_or_image_line("[A](https://example.com/A_(B)_C)"));
     }
 
     #[test]
@@ -446,6 +453,9 @@ mod tests {
         assert!(is_standalone_link_or_image_line("![alt][ref]"));
         assert!(is_standalone_link_or_image_line("- [text][ref]"));
         assert!(is_standalone_link_or_image_line("> [text][ref]"));
+        // Collapsed reference link
+        assert!(is_standalone_link_or_image_line("[text][]"));
+        assert!(is_standalone_link_or_image_line("- [text][]"));
     }
 
     #[test]
