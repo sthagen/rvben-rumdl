@@ -3118,6 +3118,91 @@ fn test_semantic_link_in_list_item() {
 }
 
 #[test]
+fn test_standalone_link_exempt_when_text_exceeds_limit() {
+    // Even when the link text itself exceeds the limit, standalone links are exempt
+    // because there's no way to shorten them without breaking the markdown structure.
+    let rule = MD013LineLength::new(30, false, false, false, false);
+    let content = "[some article with a very long title for demonstration](https://example.com/long-path)";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert!(
+        result.is_empty(),
+        "Standalone link should be exempt even with long text"
+    );
+}
+
+#[test]
+fn test_standalone_link_in_list_exempt() {
+    let rule = MD013LineLength::new(30, false, false, false, false);
+    let content = "- [some article with a very long title for demonstration](https://example.com/path)";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert!(result.is_empty(), "Standalone link in list item should be exempt");
+}
+
+#[test]
+fn test_standalone_link_in_blockquote_exempt() {
+    let rule = MD013LineLength::new(30, false, false, false, false);
+    let content = "> [some article with a very long title for demonstration](https://example.com/path)";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert!(result.is_empty(), "Standalone link in blockquote should be exempt");
+}
+
+#[test]
+fn test_standalone_image_exempt() {
+    let rule = MD013LineLength::new(30, false, false, false, false);
+    let content = "![very long alt text description that exceeds the limit](https://example.com/image.png)";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert!(result.is_empty(), "Standalone image should be exempt");
+}
+
+#[test]
+fn test_standalone_link_with_emphasis_exempt() {
+    let rule = MD013LineLength::new(30, false, false, false, false);
+    let content = "**[some article with a very long title for demonstration](https://example.com/path)**";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert!(result.is_empty(), "Bold standalone link should be exempt");
+}
+
+#[test]
+fn test_standalone_link_not_exempt_in_strict_mode() {
+    let rule = MD013LineLength::new(30, false, false, false, true);
+    let content = "[some article with a very long title for demonstration](https://example.com/long-path)";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert!(
+        !result.is_empty(),
+        "Standalone link should NOT be exempt in strict mode"
+    );
+}
+
+#[test]
+fn test_text_before_link_not_exempt() {
+    // Lines with text before the link should still be flagged when text alone exceeds limit
+    let rule = MD013LineLength::new(30, false, false, false, false);
+    let content = "Some text before the actual link here [title](https://example.com)";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    // text-only: "Some text before the actual link here [title]" = 45 chars > 30
+    assert!(
+        !result.is_empty(),
+        "Line with text before link should be flagged when text exceeds limit"
+    );
+}
+
+#[test]
+fn test_standalone_reference_link_exempt() {
+    let rule = MD013LineLength::new(30, false, false, false, false);
+    let content = "[some article with a very long title for demonstration][ref1]\n\n[ref1]: https://example.com";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert!(result.is_empty(), "Standalone reference-style link should be exempt");
+}
+
+#[test]
 fn test_blockquote_reflow_generates_fix_for_explicit_quote() {
     let config = MD013Config {
         line_length: crate::types::LineLength::new(40),

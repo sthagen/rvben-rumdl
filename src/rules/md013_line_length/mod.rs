@@ -23,7 +23,7 @@ pub mod md013_config;
 use crate::utils::is_template_directive_only;
 use helpers::{
     extract_list_marker_and_content, has_hard_break, is_github_alert_marker, is_horizontal_rule, is_list_item,
-    split_into_segments, trim_preserving_hard_break,
+    is_standalone_link_or_image_line, split_into_segments, trim_preserving_hard_break,
 };
 pub use md013_config::MD013Config;
 use md013_config::{LengthMode, ReflowMode};
@@ -316,6 +316,13 @@ impl Rule for MD013LineLength {
 
             // Skip various block types efficiently
             if !effective_config.strict {
+                // Lines whose only content is a link/image are exempt.
+                // After stripping list markers, blockquote markers, and emphasis,
+                // if only a link or image remains, there is no way to shorten it.
+                if is_standalone_link_or_image_line(line) {
+                    continue;
+                }
+
                 // Skip setext heading underlines
                 if !line.trim().is_empty() && line.trim().chars().all(|c| c == '=' || c == '-') {
                     continue;
