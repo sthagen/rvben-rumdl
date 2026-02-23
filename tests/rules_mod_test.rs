@@ -1,4 +1,4 @@
-use rumdl_lib::config::{Config, GlobalConfig};
+use rumdl_lib::config::{Config, GlobalConfig, RuleRegistry};
 use rumdl_lib::rules::{all_rules, filter_rules, opt_in_rules};
 use std::collections::HashSet;
 
@@ -326,4 +326,49 @@ fn test_filter_rules_empty_enable_returns_non_opt_in() {
 
     let filtered = filter_rules(&all, &global_config);
     assert_eq!(filtered.len(), all.len() - num_opt_in);
+}
+
+/// Every rule with configurable options must implement `default_config_section()`
+/// so the RuleRegistry knows which config keys are valid. Without it, user-supplied
+/// config keys produce false "unknown option" warnings.
+///
+/// This test catches the class of bug where a rule has a config struct but forgets
+/// to implement `default_config_section()`. If the count drops, a rule lost its
+/// config section.
+#[test]
+fn test_all_configurable_rules_expose_config_schema() {
+    let config = Config::default();
+    let rules = all_rules(&config);
+    let registry = RuleRegistry::from_rules(&rules);
+
+    // Collect rules that declare config keys
+    let mut rules_with_config = Vec::new();
+    let mut rules_without_config = Vec::new();
+
+    for rule in &rules {
+        let name = rule.name().to_string();
+        if rule.default_config_section().is_some() {
+            rules_with_config.push(name);
+        } else {
+            rules_without_config.push(name);
+        }
+    }
+
+    // Verify the registry has a non-empty schema for rules that declared config.
+    // The registry uses normalized keys (MD001 stays MD001 via normalize_key).
+    for name in &rules_with_config {
+        assert!(
+            registry.rule_schemas.contains_key(name.as_str()),
+            "Registry missing schema for configurable rule {name}"
+        );
+    }
+
+    // Guard against regressions: if this count drops, a rule lost its config.
+    // Update this number when adding new configurable rules.
+    assert_eq!(
+        rules_with_config.len(),
+        46,
+        "Expected 46 rules with config sections. If you added config to a rule, \
+         implement default_config_section(). Rules with config: {rules_with_config:?}"
+    );
 }
