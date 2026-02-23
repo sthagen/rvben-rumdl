@@ -1730,7 +1730,7 @@ title: Test Document
 description: A test document for MkDocs
 ---
 
-# Test Document
+## Overview
 
 Content here.
 "#;
@@ -1747,7 +1747,7 @@ tags:
   - testing
 ---
 
-# Extensions Test
+## Extensions
 
 !!! note
     Content after frontmatter.
@@ -1774,7 +1774,7 @@ list:
   - item2
 ---
 
-# Content
+## Content
 
 Text here.
 "#;
@@ -1791,7 +1791,7 @@ Text here.
 title: Test
 ---
 
-# Heading
+## Heading
 
 Content.
 
@@ -1815,7 +1815,7 @@ plugins:
             show_source: true
 ---
 
-# API Reference
+## API Reference
 
 ::: mymodule.MyClass
 "#;
@@ -4012,7 +4012,7 @@ mod per_extension_regression {
 
     #[test]
     fn test_meta_roundtrip() {
-        let content = "---\ntitle: Test Document\ntags:\n  - test\n  - mkdocs\n---\n\n# Meta Extension\n\nContent after frontmatter.\n";
+        let content = "---\nauthor: Test Author\ntags:\n  - test\n  - mkdocs\n---\n\n# Meta Extension\n\nContent after frontmatter.\n";
         assert_check_and_fix_roundtrip(content, "meta");
     }
 

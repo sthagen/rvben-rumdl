@@ -44,6 +44,29 @@ impl MD025SingleTitle {
         Self { config }
     }
 
+    /// Check if the document's frontmatter contains a title field matching the configured key
+    fn has_front_matter_title(&self, ctx: &crate::lint_context::LintContext) -> bool {
+        if self.config.front_matter_title.is_empty() {
+            return false;
+        }
+
+        let content_lines = ctx.raw_lines();
+        if content_lines.first().map(|l| l.trim()) != Some("---") {
+            return false;
+        }
+
+        for (idx, line) in content_lines.iter().enumerate().skip(1) {
+            if line.trim() == "---" {
+                let front_matter_content = content_lines[1..idx].join("\n");
+                return front_matter_content
+                    .lines()
+                    .any(|l| l.trim().starts_with(&format!("{}:", self.config.front_matter_title)));
+            }
+        }
+
+        false
+    }
+
     /// Check if a heading text suggests it's a legitimate document section
     fn is_document_section_heading(&self, heading_text: &str) -> bool {
         if !self.config.allow_document_sections {
@@ -186,27 +209,7 @@ impl Rule for MD025SingleTitle {
 
         let mut warnings = Vec::new();
 
-        // Check for front matter title if configured
-        let mut _found_title_in_front_matter = false;
-        if !self.config.front_matter_title.is_empty() {
-            // Detect front matter manually
-            let content_lines = ctx.raw_lines();
-            if content_lines.first().map(|l| l.trim()) == Some("---") {
-                // Look for the end of front matter
-                for (idx, line) in content_lines.iter().enumerate().skip(1) {
-                    if line.trim() == "---" {
-                        // Extract front matter content
-                        let front_matter_content = content_lines[1..idx].join("\n");
-
-                        // Check if it contains a title field
-                        _found_title_in_front_matter = front_matter_content
-                            .lines()
-                            .any(|line| line.trim().starts_with(&format!("{}:", self.config.front_matter_title)));
-                        break;
-                    }
-                }
-            }
-        }
+        let found_title_in_front_matter = self.has_front_matter_title(ctx);
 
         // Find all headings at the target level using cached information
         let mut target_level_headings = Vec::new();
@@ -224,11 +227,20 @@ impl Rule for MD025SingleTitle {
             }
         }
 
-        // If we have multiple target level headings, flag all subsequent ones (not the first)
-        // unless they are legitimate document sections
-        if target_level_headings.len() > 1 {
-            // Skip the first heading, check the rest for legitimacy
-            for &line_num in &target_level_headings[1..] {
+        // Determine which headings to flag as duplicates.
+        // If frontmatter has a title, it counts as the first heading,
+        // so ALL body headings at the target level are duplicates.
+        // Otherwise, skip the first body heading and flag the rest.
+        let headings_to_flag: &[usize] = if found_title_in_front_matter {
+            &target_level_headings
+        } else if target_level_headings.len() > 1 {
+            &target_level_headings[1..]
+        } else {
+            &[]
+        };
+
+        if !headings_to_flag.is_empty() {
+            for &line_num in headings_to_flag {
                 if let Some(heading) = &ctx.lines[line_num].heading {
                     let heading_text = &heading.text;
 
@@ -304,7 +316,9 @@ impl Rule for MD025SingleTitle {
 
     fn fix(&self, ctx: &crate::lint_context::LintContext) -> Result<String, LintError> {
         let mut fixed_lines = Vec::new();
-        let mut found_first = false;
+        // If frontmatter has a title, treat it as the first heading at the target level,
+        // so all body headings at that level get demoted.
+        let mut found_first = self.has_front_matter_title(ctx);
         let mut skip_next = false;
 
         for (line_num, line_info) in ctx.lines.iter().enumerate() {
@@ -462,6 +476,8 @@ impl Rule for MD025SingleTitle {
             return true;
         }
 
+        let has_fm_title = self.has_front_matter_title(ctx);
+
         // Fast path: count target level headings efficiently
         let mut target_level_count = 0;
         for line_info in &ctx.lines {
@@ -474,15 +490,19 @@ impl Rule for MD025SingleTitle {
                 }
                 target_level_count += 1;
 
-                // If we find more than 1, we need to run the full check
-                // to determine if they're legitimate document sections
+                // If frontmatter has a title, even 1 body heading is a duplicate
+                if has_fm_title {
+                    return false;
+                }
+
+                // Otherwise, we need more than 1 to have duplicates
                 if target_level_count > 1 {
                     return false;
                 }
             }
         }
 
-        // If we have 0 or 1 target level headings, skip the rule
+        // If we have 0 or 1 target level headings (without frontmatter title), skip
         target_level_count <= 1
     }
 
@@ -528,11 +548,12 @@ mod tests {
         assert_eq!(result.len(), 1); // Should flag the second level-1 heading
         assert_eq!(result[0].line, 5);
 
-        // Test with front matter title and a level-1 heading
+        // Test with front matter title and a level-1 heading - should flag the body H1
         let content = "---\ntitle: Document Title\n---\n\n# Main Heading\n\n## Section 1";
         let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
         let result = rule.check(&ctx).unwrap();
-        assert!(result.is_empty(), "Should not flag a single title after front matter");
+        assert_eq!(result.len(), 1, "Should flag body H1 when frontmatter has title");
+        assert_eq!(result[0].line, 5);
     }
 
     #[test]
@@ -723,6 +744,160 @@ mod tests {
         assert!(
             fixed.contains("## Second Title { #custom-id .special }"),
             "fix() should demote to H2 while preserving attribute list, got: {fixed}"
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_title_counts_as_h1() {
+        let rule = MD025SingleTitle::default();
+
+        // Frontmatter with title + one body H1 → should warn on the body H1
+        let content = "---\ntitle: Heading in frontmatter\n---\n\n# Heading in document\n\nSome introductory text.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1, "Should flag body H1 when frontmatter has title");
+        assert_eq!(result[0].line, 5);
+    }
+
+    #[test]
+    fn test_frontmatter_title_with_multiple_body_h1s() {
+        let config = md025_config::MD025Config {
+            front_matter_title: "title".to_string(),
+            ..Default::default()
+        };
+        let rule = MD025SingleTitle::from_config_struct(config);
+
+        // Frontmatter with title + multiple body H1s → should warn on ALL body H1s
+        let content = "---\ntitle: FM Title\n---\n\n# First Body H1\n\nContent\n\n# Second Body H1\n\nMore content";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 2, "Should flag all body H1s when frontmatter has title");
+        assert_eq!(result[0].line, 5);
+        assert_eq!(result[1].line, 9);
+    }
+
+    #[test]
+    fn test_frontmatter_without_title_no_warning() {
+        let rule = MD025SingleTitle::default();
+
+        // Frontmatter without title key + one body H1 → no warning
+        let content = "---\nauthor: Someone\ndate: 2024-01-01\n---\n\n# Only Heading\n\nContent here.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(result.is_empty(), "Should not flag when frontmatter has no title");
+    }
+
+    #[test]
+    fn test_no_frontmatter_single_h1_no_warning() {
+        let rule = MD025SingleTitle::default();
+
+        // No frontmatter + single body H1 → no warning
+        let content = "# Only Heading\n\nSome content.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(result.is_empty(), "Should not flag single H1 without frontmatter");
+    }
+
+    #[test]
+    fn test_frontmatter_custom_title_key() {
+        // Custom front_matter_title key
+        let config = md025_config::MD025Config {
+            front_matter_title: "heading".to_string(),
+            ..Default::default()
+        };
+        let rule = MD025SingleTitle::from_config_struct(config);
+
+        // Frontmatter with "heading:" key → should count as H1
+        let content = "---\nheading: My Heading\n---\n\n# Body Heading\n\nContent.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.len(),
+            1,
+            "Should flag body H1 when custom frontmatter key matches"
+        );
+        assert_eq!(result[0].line, 5);
+
+        // Frontmatter with "title:" but configured for "heading:" → should not count
+        let content = "---\ntitle: My Title\n---\n\n# Body Heading\n\nContent.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "Should not flag when frontmatter key doesn't match config"
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_title_empty_config_disables() {
+        // Empty front_matter_title disables frontmatter title detection
+        let rule = MD025SingleTitle::new(1, "");
+
+        let content = "---\ntitle: My Title\n---\n\n# Body Heading\n\nContent.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(result.is_empty(), "Should not flag when front_matter_title is empty");
+    }
+
+    #[test]
+    fn test_frontmatter_title_with_level_config() {
+        // When level is set to 2, frontmatter title counts as the first heading at that level
+        let config = md025_config::MD025Config {
+            level: HeadingLevel::new(2).unwrap(),
+            front_matter_title: "title".to_string(),
+            ..Default::default()
+        };
+        let rule = MD025SingleTitle::from_config_struct(config);
+
+        // Frontmatter with title + body H2 → should flag body H2
+        let content = "---\ntitle: FM Title\n---\n\n# Body H1\n\n## Body H2\n\nContent.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.len(),
+            1,
+            "Should flag body H2 when level=2 and frontmatter has title"
+        );
+        assert_eq!(result[0].line, 7);
+    }
+
+    #[test]
+    fn test_frontmatter_title_fix_demotes_body_heading() {
+        let config = md025_config::MD025Config {
+            front_matter_title: "title".to_string(),
+            ..Default::default()
+        };
+        let rule = MD025SingleTitle::from_config_struct(config);
+
+        let content = "---\ntitle: FM Title\n---\n\n# Body Heading\n\nContent.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        assert!(
+            fixed.contains("## Body Heading"),
+            "Fix should demote body H1 to H2 when frontmatter has title, got: {fixed}"
+        );
+        // Frontmatter should be preserved
+        assert!(fixed.contains("---\ntitle: FM Title\n---"));
+    }
+
+    #[test]
+    fn test_frontmatter_title_should_skip_respects_frontmatter() {
+        let rule = MD025SingleTitle::default();
+
+        // With frontmatter title + 1 body H1, should_skip should return false
+        let content = "---\ntitle: FM Title\n---\n\n# Body Heading\n\nContent.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        assert!(
+            !rule.should_skip(&ctx),
+            "should_skip must return false when frontmatter has title and body has H1"
+        );
+
+        // Without frontmatter title + 1 body H1, should_skip should return true
+        let content = "---\nauthor: Someone\n---\n\n# Body Heading\n\nContent.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        assert!(
+            rule.should_skip(&ctx),
+            "should_skip should return true with no frontmatter title and single H1"
         );
     }
 }

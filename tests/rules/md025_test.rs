@@ -32,21 +32,25 @@ fn test_md025_no_title() {
 
 #[test]
 fn test_md025_with_front_matter() {
+    // Frontmatter `title:` counts as the first H1, so a body H1 is a duplicate
     let rule = MD025SingleTitle::default();
     let content = "---\ntitle: Document Title\n---\n# Title\n## Heading 2\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
-    assert!(result.is_empty(), "Should not flag a single title after front matter");
+    assert_eq!(result.len(), 1, "Body H1 should be flagged when frontmatter has title");
+    assert_eq!(result[0].line, 4);
 }
 
 #[test]
 fn test_md025_multiple_with_front_matter() {
+    // Both body H1s are duplicates of the frontmatter title
     let rule = MD025SingleTitle::default();
     let content = "---\ntitle: Document Title\n---\n# Title 1\n## Heading 2\n# Title 2\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
-    assert_eq!(result.len(), 1);
-    assert_eq!(result[0].line, 6);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].line, 4);
+    assert_eq!(result[1].line, 6);
 }
 
 #[test]

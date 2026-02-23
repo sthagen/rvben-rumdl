@@ -487,7 +487,7 @@ fn test_md025_edge_cases() {
     let result = rule_with_sections.check(&ctx).unwrap();
     assert!(result.is_empty(), "Document sections should be allowed");
 
-    // Test 2: Front matter interaction
+    // Test 2: Front matter interaction - frontmatter title counts as H1
     let content = "\
 ---
 title: YAML Title
@@ -496,7 +496,8 @@ title: YAML Title
 ## Content";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
-    assert!(result.is_empty(), "Single H1 after front matter should be valid");
+    assert_eq!(result.len(), 1, "Body H1 should be flagged when frontmatter has title");
+    assert_eq!(result[0].line, 4);
 
     // Test 3: Horizontal rule separators
     let rule_with_separators = MD025SingleTitle::new(1, "title");
