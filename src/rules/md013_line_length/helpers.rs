@@ -232,14 +232,6 @@ pub(crate) fn is_standalone_link_or_image_line(line: &str) -> bool {
         .or_else(|| s.strip_prefix("+ "))
     {
         s = rest;
-        // Also strip task list checkbox
-        if let Some(rest) = s
-            .strip_prefix("[ ] ")
-            .or_else(|| s.strip_prefix("[x] "))
-            .or_else(|| s.strip_prefix("[X] "))
-        {
-            s = rest;
-        }
     } else {
         // Check for ordered list marker: digits followed by `. `
         let digit_end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
@@ -248,6 +240,15 @@ pub(crate) fn is_standalone_link_or_image_line(line: &str) -> bool {
                 s = rest;
             }
         }
+    }
+
+    // Strip task list checkbox (applies to both bullet and ordered lists)
+    if let Some(rest) = s
+        .strip_prefix("[ ] ")
+        .or_else(|| s.strip_prefix("[x] "))
+        .or_else(|| s.strip_prefix("[X] "))
+    {
+        s = rest;
     }
 
     s = s.trim_start();
@@ -424,9 +425,11 @@ mod tests {
         assert!(is_standalone_link_or_image_line("99. [text](url)"));
         // Indented list item
         assert!(is_standalone_link_or_image_line("  - [text](url)"));
-        // Task list with link
+        // Task list with link (bullet and ordered)
         assert!(is_standalone_link_or_image_line("- [ ] [text](url)"));
         assert!(is_standalone_link_or_image_line("- [x] [text](url)"));
+        assert!(is_standalone_link_or_image_line("1. [x] [text](url)"));
+        assert!(is_standalone_link_or_image_line("1. [ ] [text](url)"));
     }
 
     #[test]
