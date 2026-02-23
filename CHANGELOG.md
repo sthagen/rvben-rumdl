@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.26] - 2026-02-23
+
+### Added
+
+- **MD076**: New rule for list item spacing — enforces consistent use of blank lines
+  between list items
+- **LSP**: Markdown link target completion — autocomplete file paths and headings when
+  typing link destinations ([#434](https://github.com/rvben/rumdl/issues/434))
+- **MD041**: Extended fix support for HTML block preamble, plain text titles, and
+  directive-only documents ([#398](https://github.com/rvben/rumdl/issues/398))
+
+### Fixed
+
+- **MD001**: Empty ATX headings (e.g., `# ` with no text) are now preserved during
+  heading level conversion instead of being deleted, fixing non-idempotent fix behavior
+- **MD012**: Excess blank lines around headings are now flagged using MD022's configured
+  limits, preventing conflicts between the two rules
+  ([#429](https://github.com/rvben/rumdl/issues/429),
+  [#449](https://github.com/rvben/rumdl/issues/449))
+- **MD013**: Lines whose only content is a link or image (including in list items,
+  blockquotes, and with emphasis wrappers) are now exempt from line length checks in
+  non-strict mode, since they cannot be shortened
+  ([#452](https://github.com/rvben/rumdl/issues/452))
+- **MD013**: URLs with balanced parentheses (e.g., Wikipedia links like
+  `Rust_(programming_language)`) are now correctly recognized as standalone links
+- **MD013**: Ordered list task checkboxes (`1. [x] [link](url)`) are now correctly
+  detected in standalone link exemption and text reflow
+- **MD025**: Frontmatter `title` field is now counted as the first H1 when checking for
+  single title ([#450](https://github.com/rvben/rumdl/issues/450))
+- **MD044**: HTML comments are now checked for proper names by default (previously
+  skipped due to config default mismatch)
+  ([#446](https://github.com/rvben/rumdl/issues/446))
+- **MD044**: Inline config directives (`<!-- rumdl-disable -->`,
+  `<!-- markdownlint-enable -->`) are no longer flagged when the directive keyword
+  matches a configured proper name
+- **MD044**: YAML frontmatter keys are no longer flagged as improperly capitalized
+  proper names ([#448](https://github.com/rvben/rumdl/issues/448))
+- **MD052**: Added missing `default_config_section` for config validation
+  ([#451](https://github.com/rvben/rumdl/issues/451))
+
+### Changed
+
+- **MD013**: Refactored standalone link detection to reuse shared
+  `extract_list_marker_and_content` utility, also fixing ordered list task checkbox
+  handling in text reflow
+
 ## [0.1.25] - 2026-02-21
 
 ### Fixed

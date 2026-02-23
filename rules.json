@@ -694,5 +694,15 @@
     "fix": "Fix is sometimes available.",
     "fix_availability": "Sometimes",
     "url": "https://rumdl.dev/md075/"
+  },
+  {
+    "code": "MD076",
+    "name": "list-item-spacing",
+    "aliases": [],
+    "summary": "List item spacing should be consistent",
+    "category": "other",
+    "fix": "Fix is always available.",
+    "fix_availability": "Always",
+    "url": "https://rumdl.dev/md076/"
   }
 ]
