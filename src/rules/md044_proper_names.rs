@@ -64,6 +64,11 @@ type WarningPosition = (usize, usize, String); // (line, column, found_name)
 /// When fixing issues, this rule replaces incorrect capitalization with the correct form
 /// as defined in the configuration.
 ///
+/// Check if a trimmed line is an inline config comment (rumdl or markdownlint directives).
+fn is_inline_config_comment(trimmed: &str) -> bool {
+    trimmed.starts_with("<!-- rumdl-") || trimmed.starts_with("<!-- markdownlint-")
+}
+
 #[derive(Clone)]
 pub struct MD044ProperNames {
     config: MD044Config,
@@ -266,8 +271,13 @@ impl MD044ProperNames {
                 continue;
             }
 
-            // Skip frontmatter entirely — matches markdownlint behavior
+            // Skip frontmatter entirely
             if line_info.in_front_matter {
+                continue;
+            }
+
+            // Skip inline config comments (rumdl-disable, markdownlint-enable, etc.)
+            if is_inline_config_comment(trimmed) {
                 continue;
             }
 
@@ -894,7 +904,119 @@ Third line with RUST and PYTHON."#;
     fn test_default_config() {
         let config = MD044Config::default();
         assert!(config.names.is_empty());
-        assert!(!config.code_blocks); // Default is false (skip code blocks)
+        assert!(!config.code_blocks);
+        assert!(config.html_elements);
+        assert!(config.html_comments);
+    }
+
+    #[test]
+    fn test_default_config_checks_html_comments() {
+        let mut config = MD044Config::default();
+        config.names = vec!["JavaScript".to_string()];
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "# Guide\n\n<!-- javascript mentioned here -->\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(result.len(), 1, "Default config should check HTML comments");
+        assert_eq!(result[0].line, 3);
+    }
+
+    #[test]
+    fn test_default_config_skips_code_blocks() {
+        let mut config = MD044Config::default();
+        config.names = vec!["JavaScript".to_string()];
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "# Guide\n\n```\njavascript in code\n```\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(result.len(), 0, "Default config should skip code blocks");
+    }
+
+    #[test]
+    fn test_standalone_html_comment_checked() {
+        let mut config = MD044Config::default();
+        config.names = vec!["Test".to_string()];
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "# Heading\n\n<!-- this is a test example -->\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(result.len(), 1, "Should flag proper name in standalone HTML comment");
+        assert_eq!(result[0].line, 3);
+    }
+
+    #[test]
+    fn test_inline_config_comments_not_flagged() {
+        let mut config = MD044Config::default();
+        config.names = vec!["RUMDL".to_string()];
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        // Lines 1, 3, 4, 6 are inline config comments — should not be flagged.
+        // Lines 2, 5 contain "rumdl" in regular text — flagged by rule.check(),
+        // but would be suppressed by the linting engine's inline config filtering.
+        let content = "<!-- rumdl-disable MD044 -->\nSome rumdl text here.\n<!-- rumdl-enable MD044 -->\n<!-- markdownlint-disable -->\nMore rumdl text.\n<!-- markdownlint-enable -->\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(result.len(), 2, "Should only flag body lines, not config comments");
+        assert_eq!(result[0].line, 2);
+        assert_eq!(result[1].line, 5);
+    }
+
+    #[test]
+    fn test_html_comment_skipped_when_disabled() {
+        let config = MD044Config {
+            names: vec!["Test".to_string()],
+            code_blocks: true,
+            html_elements: true,
+            html_comments: false,
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "# Heading\n\n<!-- this is a test example -->\n\nRegular test here.\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(
+            result.len(),
+            1,
+            "Should only flag 'test' outside HTML comment when html_comments=false"
+        );
+        assert_eq!(result[0].line, 5);
+    }
+
+    #[test]
+    fn test_fix_corrects_html_comment_content() {
+        let mut config = MD044Config::default();
+        config.names = vec!["JavaScript".to_string()];
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "# Guide\n\n<!-- javascript mentioned here -->\n";
+        let ctx = create_context(content);
+        let fixed = rule.fix(&ctx).unwrap();
+
+        assert_eq!(fixed, "# Guide\n\n<!-- JavaScript mentioned here -->\n");
+    }
+
+    #[test]
+    fn test_fix_does_not_modify_inline_config_comments() {
+        let mut config = MD044Config::default();
+        config.names = vec!["RUMDL".to_string()];
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "<!-- rumdl-disable -->\nSome rumdl text.\n<!-- rumdl-enable -->\n";
+        let ctx = create_context(content);
+        let fixed = rule.fix(&ctx).unwrap();
+
+        // Config comments should be untouched; body text should be fixed
+        assert!(fixed.contains("<!-- rumdl-disable -->"));
+        assert!(fixed.contains("<!-- rumdl-enable -->"));
+        assert!(fixed.contains("Some RUMDL text."));
     }
 
     #[test]
