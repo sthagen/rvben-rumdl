@@ -152,7 +152,7 @@ mod md021_no_multiple_space_closed_atx;
 pub use md020_no_missing_space_closed_atx::MD020NoMissingSpaceClosedAtx;
 pub use md021_no_multiple_space_closed_atx::MD021NoMultipleSpaceClosedAtx;
 
-mod md022_blanks_around_headings;
+pub(crate) mod md022_blanks_around_headings;
 pub use md022_blanks_around_headings::MD022BlanksAroundHeadings;
 
 mod md023_heading_start_left;

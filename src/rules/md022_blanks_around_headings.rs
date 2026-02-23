@@ -8,7 +8,7 @@ use crate::utils::quarto_divs;
 use crate::utils::range_utils::calculate_heading_range;
 use toml;
 
-mod md022_config;
+pub(crate) mod md022_config;
 use md022_config::MD022Config;
 
 ///
