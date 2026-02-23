@@ -229,12 +229,25 @@ impl HeadingUtils {
 
     /// Convert a heading to a different style
     pub fn convert_heading_style(text_content: &str, level: u32, style: HeadingStyle) -> String {
-        if text_content.trim().is_empty() {
-            return String::new();
-        }
-
         // Validate heading level
         let level = level.clamp(1, 6);
+
+        if text_content.trim().is_empty() {
+            // Empty headings: ATX can be just `##`, Setext requires text so return empty
+            return match style {
+                HeadingStyle::Atx => "#".repeat(level as usize),
+                HeadingStyle::AtxClosed => {
+                    let hashes = "#".repeat(level as usize);
+                    format!("{hashes} {hashes}")
+                }
+                HeadingStyle::Setext1 | HeadingStyle::Setext2 => String::new(),
+                // These are meta-styles resolved before calling this function
+                HeadingStyle::Consistent | HeadingStyle::SetextWithAtx | HeadingStyle::SetextWithAtxClosed => {
+                    "#".repeat(level as usize)
+                }
+            };
+        }
+
         let indentation = text_content
             .chars()
             .take_while(|c| c.is_whitespace())
@@ -856,9 +869,16 @@ mod tests {
 
     #[test]
     fn test_convert_heading_style_edge_cases() {
-        // Empty text
-        assert_eq!(HeadingUtils::convert_heading_style("", 1, HeadingStyle::Atx), "");
-        assert_eq!(HeadingUtils::convert_heading_style("   ", 1, HeadingStyle::Atx), "");
+        // Empty text: ATX headings produce just the hash marks (valid markdown)
+        assert_eq!(HeadingUtils::convert_heading_style("", 1, HeadingStyle::Atx), "#");
+        assert_eq!(HeadingUtils::convert_heading_style("   ", 1, HeadingStyle::Atx), "#");
+        assert_eq!(HeadingUtils::convert_heading_style("", 2, HeadingStyle::Atx), "##");
+        assert_eq!(
+            HeadingUtils::convert_heading_style("", 1, HeadingStyle::AtxClosed),
+            "# #"
+        );
+        // Setext cannot represent empty headings, returns empty
+        assert_eq!(HeadingUtils::convert_heading_style("", 1, HeadingStyle::Setext1), "");
 
         // Level clamping
         assert_eq!(
