@@ -963,6 +963,14 @@ impl Rule for MD052ReferenceLinkImages {
         self
     }
 
+    fn default_config_section(&self) -> Option<(String, toml::Value)> {
+        let json_value = serde_json::to_value(&self.config).ok()?;
+        Some((
+            self.name().to_string(),
+            crate::rule_config_serde::json_to_toml_value(&json_value)?,
+        ))
+    }
+
     fn from_config(config: &crate::config::Config) -> Box<dyn Rule>
     where
         Self: Sized,
