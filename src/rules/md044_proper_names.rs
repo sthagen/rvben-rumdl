@@ -911,8 +911,10 @@ Third line with RUST and PYTHON."#;
 
     #[test]
     fn test_default_config_checks_html_comments() {
-        let mut config = MD044Config::default();
-        config.names = vec!["JavaScript".to_string()];
+        let config = MD044Config {
+            names: vec!["JavaScript".to_string()],
+            ..MD044Config::default()
+        };
         let rule = MD044ProperNames::from_config_struct(config);
 
         let content = "# Guide\n\n<!-- javascript mentioned here -->\n";
@@ -925,8 +927,10 @@ Third line with RUST and PYTHON."#;
 
     #[test]
     fn test_default_config_skips_code_blocks() {
-        let mut config = MD044Config::default();
-        config.names = vec!["JavaScript".to_string()];
+        let config = MD044Config {
+            names: vec!["JavaScript".to_string()],
+            ..MD044Config::default()
+        };
         let rule = MD044ProperNames::from_config_struct(config);
 
         let content = "# Guide\n\n```\njavascript in code\n```\n";
@@ -938,8 +942,10 @@ Third line with RUST and PYTHON."#;
 
     #[test]
     fn test_standalone_html_comment_checked() {
-        let mut config = MD044Config::default();
-        config.names = vec!["Test".to_string()];
+        let config = MD044Config {
+            names: vec!["Test".to_string()],
+            ..MD044Config::default()
+        };
         let rule = MD044ProperNames::from_config_struct(config);
 
         let content = "# Heading\n\n<!-- this is a test example -->\n";
@@ -952,8 +958,10 @@ Third line with RUST and PYTHON."#;
 
     #[test]
     fn test_inline_config_comments_not_flagged() {
-        let mut config = MD044Config::default();
-        config.names = vec!["RUMDL".to_string()];
+        let config = MD044Config {
+            names: vec!["RUMDL".to_string()],
+            ..MD044Config::default()
+        };
         let rule = MD044ProperNames::from_config_struct(config);
 
         // Lines 1, 3, 4, 6 are inline config comments — should not be flagged.
@@ -992,8 +1000,10 @@ Third line with RUST and PYTHON."#;
 
     #[test]
     fn test_fix_corrects_html_comment_content() {
-        let mut config = MD044Config::default();
-        config.names = vec!["JavaScript".to_string()];
+        let config = MD044Config {
+            names: vec!["JavaScript".to_string()],
+            ..MD044Config::default()
+        };
         let rule = MD044ProperNames::from_config_struct(config);
 
         let content = "# Guide\n\n<!-- javascript mentioned here -->\n";
@@ -1005,8 +1015,10 @@ Third line with RUST and PYTHON."#;
 
     #[test]
     fn test_fix_does_not_modify_inline_config_comments() {
-        let mut config = MD044Config::default();
-        config.names = vec!["RUMDL".to_string()];
+        let config = MD044Config {
+            names: vec!["RUMDL".to_string()],
+            ..MD044Config::default()
+        };
         let rule = MD044ProperNames::from_config_struct(config);
 
         let content = "<!-- rumdl-disable -->\nSome rumdl text.\n<!-- rumdl-enable -->\n";
