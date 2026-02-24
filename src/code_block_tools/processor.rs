@@ -497,10 +497,10 @@ impl<'a> CodeBlockToolProcessor<'a> {
             let lang_config = self.config.languages.get(&canonical_lang);
 
             // If language is explicitly configured with enabled=false, skip silently
-            if let Some(lc) = lang_config {
-                if !lc.enabled {
-                    continue;
-                }
+            if let Some(lc) = lang_config
+                && !lc.enabled
+            {
+                continue;
             }
 
             let lint_tools = match lang_config {
@@ -640,10 +640,10 @@ impl<'a> CodeBlockToolProcessor<'a> {
             let lang_config = self.config.languages.get(&canonical_lang);
 
             // If language is explicitly configured with enabled=false, skip silently
-            if let Some(lc) = lang_config {
-                if !lc.enabled {
-                    continue;
-                }
+            if let Some(lc) = lang_config
+                && !lc.enabled
+            {
+                continue;
             }
 
             let format_tools = match lang_config {

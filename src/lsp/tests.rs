@@ -3078,12 +3078,7 @@ style = "fixed"
 
     let md007_values = &md007_config.unwrap().values;
     let indent_value = md007_values.get("indent").map(|v| v.as_integer().unwrap_or(0));
-    assert_eq!(
-        indent_value,
-        Some(4),
-        "MD007 indent should be 4, got: {:?}",
-        md007_values
-    );
+    assert_eq!(indent_value, Some(4), "MD007 indent should be 4, got: {md007_values:?}",);
 
     // Step 2: Verify detection works (should find 2-space indent as violation)
     let all_rules = crate::rules::all_rules(&resolved_config);
@@ -3153,12 +3148,10 @@ style = "fixed"
     let formatted_text = &edits[0].new_text;
     assert!(
         formatted_text.contains("    - Nested bullet"),
-        "Formatted text should have 4-space indent, got:\n{}",
-        formatted_text
+        "Formatted text should have 4-space indent, got:\n{formatted_text}",
     );
     assert!(
         !formatted_text.contains("\n  - Nested"),
-        "Formatted text should NOT have 2-space indent, got:\n{}",
-        formatted_text
+        "Formatted text should NOT have 2-space indent, got:\n{formatted_text}",
     );
 }

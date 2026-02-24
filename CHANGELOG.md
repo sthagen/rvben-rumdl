@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.28] - 2026-02-24
+
+### Added
+
+- **Import**: `rumdl import` now preserves original rule aliases (e.g., `no-hard-tabs`
+  instead of `MD010`) in the generated config file
+  ([#460](https://github.com/rvben/rumdl/issues/460))
+- **Code Block Tools**: Per-language configs now support an `enabled` field to disable
+  linting/formatting for specific languages while keeping the configuration
+  ([#458](https://github.com/rvben/rumdl/issues/458))
+
+### Fixed
+
+- **MD044**: Vale (`<!-- vale ... -->`) and remark-lint (`<!-- lint ... -->`) inline
+  configuration directives are now skipped when checking proper names
+  ([#456](https://github.com/rvben/rumdl/issues/456))
+
 ## [0.1.27] - 2026-02-24
 
 ### Fixed
