@@ -271,8 +271,14 @@ impl MD044ProperNames {
                 continue;
             }
 
-            // Skip frontmatter entirely
-            if line_info.in_front_matter {
+            // For frontmatter lines, determine offset where checkable value content starts.
+            // YAML keys should not be checked against proper names - only values.
+            let fm_value_offset = if line_info.in_front_matter {
+                Self::frontmatter_value_offset(line)
+            } else {
+                0
+            };
+            if fm_value_offset == usize::MAX {
                 continue;
             }
 
@@ -298,6 +304,11 @@ impl MD044ProperNames {
                         // Check word boundaries manually for Unicode support
                         let start_pos = cap.start();
                         let end_pos = cap.end();
+
+                        // Skip matches in the key portion of frontmatter lines
+                        if start_pos < fm_value_offset {
+                            continue;
+                        }
 
                         // Skip matches inside HTML tag attributes (handles multi-line tags)
                         let byte_pos = line_info.byte_offset + start_pos;
@@ -427,6 +438,101 @@ impl MD044ProperNames {
                 Some(c) => Self::is_word_boundary_char(c),
             }
         }
+    }
+
+    /// For a frontmatter line, return the byte offset where the checkable
+    /// value portion starts. Returns `usize::MAX` if the entire line should be
+    /// skipped (frontmatter delimiters, key-only lines, YAML comments, flow constructs).
+    fn frontmatter_value_offset(line: &str) -> usize {
+        let trimmed = line.trim();
+
+        // Skip frontmatter delimiters and empty lines
+        if trimmed == "---" || trimmed == "+++" || trimmed.is_empty() {
+            return usize::MAX;
+        }
+
+        // Skip YAML comments
+        if trimmed.starts_with('#') {
+            return usize::MAX;
+        }
+
+        // YAML list item: "  - item" or "  - key: value"
+        let stripped = line.trim_start();
+        if stripped.starts_with("- ") {
+            let leading = line.len() - stripped.len();
+            let after_dash = &stripped[2..];
+            // Check if the list item contains a mapping (e.g., "- key: value")
+            if let Some(result) = Self::kv_value_offset(line, after_dash, leading + 2) {
+                return result;
+            }
+            // Bare list item value (no colon) - check content after "- "
+            return leading + 2;
+        }
+        if stripped == "-" {
+            return usize::MAX;
+        }
+
+        // Key-value pair with colon separator (YAML): "key: value"
+        if let Some(result) = Self::kv_value_offset(line, stripped, line.len() - stripped.len()) {
+            return result;
+        }
+
+        // Key-value pair with equals separator (TOML): "key = value"
+        if let Some(eq_pos) = line.find('=') {
+            let after_eq = eq_pos + 1;
+            if after_eq < line.len() && line.as_bytes()[after_eq] == b' ' {
+                let value_start = after_eq + 1;
+                let value_slice = &line[value_start..];
+                let value_trimmed = value_slice.trim();
+                if value_trimmed.is_empty() {
+                    return usize::MAX;
+                }
+                // For quoted values, skip the opening quote character
+                if (value_trimmed.starts_with('"') && value_trimmed.ends_with('"'))
+                    || (value_trimmed.starts_with('\'') && value_trimmed.ends_with('\''))
+                {
+                    let quote_offset = value_slice.find(['"', '\'']).unwrap_or(0);
+                    return value_start + quote_offset + 1;
+                }
+                return value_start;
+            }
+            // Equals with no space after or at end of line -> no value to check
+            return usize::MAX;
+        }
+
+        // No separator found - continuation line or bare value, check the whole line
+        0
+    }
+
+    /// Parse a key-value pair using colon separator within `content` that starts
+    /// at `base_offset` in the original line. Returns `Some(offset)` if a colon
+    /// separator is found, `None` if no colon is present.
+    fn kv_value_offset(line: &str, content: &str, base_offset: usize) -> Option<usize> {
+        let colon_pos = content.find(':')?;
+        let abs_colon = base_offset + colon_pos;
+        let after_colon = abs_colon + 1;
+        if after_colon < line.len() && line.as_bytes()[after_colon] == b' ' {
+            let value_start = after_colon + 1;
+            let value_slice = &line[value_start..];
+            let value_trimmed = value_slice.trim();
+            if value_trimmed.is_empty() {
+                return Some(usize::MAX);
+            }
+            // Skip flow mappings and flow sequences - too complex for heuristic parsing
+            if value_trimmed.starts_with('{') || value_trimmed.starts_with('[') {
+                return Some(usize::MAX);
+            }
+            // For quoted values, skip the opening quote character
+            if (value_trimmed.starts_with('"') && value_trimmed.ends_with('"'))
+                || (value_trimmed.starts_with('\'') && value_trimmed.ends_with('\''))
+            {
+                let quote_offset = value_slice.find(['"', '\'']).unwrap_or(0);
+                return Some(value_start + quote_offset + 1);
+            }
+            return Some(value_start);
+        }
+        // Colon with no space after or at end of line -> no value to check
+        Some(usize::MAX)
     }
 
     // Get the proper name that should be used for a found name
@@ -1554,16 +1660,18 @@ Visit [github documentation](https://github.com/docs) for details.
     }
 
     #[test]
-    fn test_frontmatter_yaml_values_not_flagged() {
-        // Frontmatter is skipped entirely, matching markdownlint behavior.
+    fn test_frontmatter_yaml_values_flagged() {
+        // Incorrectly capitalized names in YAML values should be flagged.
         let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
 
         let content = "---\ntitle: Heading\nkey: a test value\n---\n\nTest\n";
         let ctx = create_context(content);
         let result = rule.check(&ctx).unwrap();
 
-        // "test" in the YAML value (line 3) should NOT be flagged — frontmatter is skipped
-        assert!(result.is_empty(), "Should not flag names in frontmatter: {result:?}");
+        // "test" in the YAML value (line 3) SHOULD be flagged
+        assert_eq!(result.len(), 1, "Should flag 'test' in YAML value: {result:?}");
+        assert_eq!(result[0].line, 3);
+        assert_eq!(result[0].column, 8); // "key: a " = 7 chars, then "test" at column 8
     }
 
     #[test]
@@ -1610,30 +1718,37 @@ Visit [github documentation](https://github.com/docs) for details.
     }
 
     #[test]
-    fn test_frontmatter_list_items_not_checked() {
-        // Frontmatter is skipped entirely, including list items.
+    fn test_frontmatter_list_items_checked() {
+        // YAML list items are values and should be checked for proper names.
         let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
 
         let content = "---\ntags:\n  - test\n  - other\n---\n\nBody text\n";
         let ctx = create_context(content);
         let result = rule.check(&ctx).unwrap();
 
-        assert!(
-            result.is_empty(),
-            "Should not flag names in frontmatter list items: {result:?}"
-        );
+        // "test" as a list item value SHOULD be flagged
+        assert_eq!(result.len(), 1, "Should flag 'test' in YAML list item: {result:?}");
+        assert_eq!(result[0].line, 3);
     }
 
     #[test]
-    fn test_frontmatter_value_with_multiple_colons_not_checked() {
-        // Frontmatter is skipped entirely, matching markdownlint behavior.
+    fn test_frontmatter_value_with_multiple_colons() {
+        // For "key: value: more", key is before first colon.
         let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
 
         let content = "---\ntest: description: a test thing\n---\n\nBody text\n";
         let ctx = create_context(content);
         let result = rule.check(&ctx).unwrap();
 
-        assert!(result.is_empty(), "Should not flag names in frontmatter: {result:?}");
+        // "test" as key should NOT be flagged
+        // "test" in value portion ("description: a test thing") SHOULD be flagged
+        assert_eq!(
+            result.len(),
+            1,
+            "Should flag 'test' in value after first colon: {result:?}"
+        );
+        assert_eq!(result[0].line, 2);
+        assert!(result[0].column > 6, "Violation column should be in value portion");
     }
 
     #[test]
@@ -1650,27 +1765,266 @@ Visit [github documentation](https://github.com/docs) for details.
     }
 
     #[test]
-    fn test_frontmatter_fix_skips_entirely() {
-        // Fix should not modify any frontmatter content, only body text.
+    fn test_frontmatter_fix_corrects_values_preserves_keys() {
+        // Fix should correct YAML values but preserve keys.
         let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
 
         let content = "---\ntest: a test value\n---\n\ntest here\n";
         let ctx = create_context(content);
         let fixed = rule.fix(&ctx).unwrap();
 
-        // Frontmatter should be entirely preserved; body "test" should become "Test"
-        assert_eq!(fixed, "---\ntest: a test value\n---\n\nTest here\n");
+        // Key "test" should remain lowercase; value "test" should become "Test"
+        assert_eq!(fixed, "---\ntest: a Test value\n---\n\nTest here\n");
     }
 
     #[test]
-    fn test_frontmatter_multiword_value_not_flagged() {
-        // Frontmatter is skipped entirely, matching markdownlint behavior.
+    fn test_frontmatter_multiword_value_flagged() {
+        // Multiple proper names in a single YAML value should all be flagged.
         let rule = MD044ProperNames::new(vec!["JavaScript".to_string(), "TypeScript".to_string()], true);
 
         let content = "---\ndescription: Learn javascript and typescript\n---\n\nBody\n";
         let ctx = create_context(content);
         let result = rule.check(&ctx).unwrap();
 
-        assert!(result.is_empty(), "Should not flag names in frontmatter: {result:?}");
+        assert_eq!(result.len(), 2, "Should flag both names in YAML value: {result:?}");
+        assert!(result.iter().all(|w| w.line == 2));
+    }
+
+    #[test]
+    fn test_frontmatter_yaml_comments_not_checked() {
+        // YAML comments inside frontmatter should be skipped entirely.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\n# test comment\ntitle: Heading\n---\n\nBody text\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert!(result.is_empty(), "Should not flag names in YAML comments: {result:?}");
+    }
+
+    #[test]
+    fn test_frontmatter_delimiters_not_checked() {
+        // Frontmatter delimiter lines (--- or +++) should never be checked.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\ntitle: Heading\n---\n\ntest here\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // Only the body "test" on line 5 should be flagged
+        assert_eq!(result.len(), 1, "Should only flag body text: {result:?}");
+        assert_eq!(result[0].line, 5);
+    }
+
+    #[test]
+    fn test_frontmatter_continuation_lines_checked() {
+        // Continuation lines (indented, no colon) are value content and should be checked.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\ndescription: >\n  a test value\n  continued here\n---\n\nBody\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // "test" on the continuation line should be flagged
+        assert_eq!(result.len(), 1, "Should flag 'test' in continuation line: {result:?}");
+        assert_eq!(result[0].line, 3);
+    }
+
+    #[test]
+    fn test_frontmatter_quoted_values_checked() {
+        // Quoted YAML values should have their content checked (inside the quotes).
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\ntitle: \"a test title\"\n---\n\nBody\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(result.len(), 1, "Should flag 'test' in quoted YAML value: {result:?}");
+        assert_eq!(result[0].line, 2);
+    }
+
+    #[test]
+    fn test_frontmatter_single_quoted_values_checked() {
+        // Single-quoted YAML values should have their content checked.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\ntitle: 'a test title'\n---\n\nBody\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(
+            result.len(),
+            1,
+            "Should flag 'test' in single-quoted YAML value: {result:?}"
+        );
+        assert_eq!(result[0].line, 2);
+    }
+
+    #[test]
+    fn test_frontmatter_fix_multiword_values() {
+        // Fix should correct all proper names in frontmatter values.
+        let rule = MD044ProperNames::new(vec!["JavaScript".to_string(), "TypeScript".to_string()], true);
+
+        let content = "---\ndescription: Learn javascript and typescript\n---\n\nBody\n";
+        let ctx = create_context(content);
+        let fixed = rule.fix(&ctx).unwrap();
+
+        assert_eq!(
+            fixed,
+            "---\ndescription: Learn JavaScript and TypeScript\n---\n\nBody\n"
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_fix_preserves_yaml_structure() {
+        // Fix should preserve YAML structure while correcting values.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\ntags:\n  - test\n  - other\ntitle: a test doc\n---\n\ntest body\n";
+        let ctx = create_context(content);
+        let fixed = rule.fix(&ctx).unwrap();
+
+        assert_eq!(
+            fixed,
+            "---\ntags:\n  - Test\n  - other\ntitle: a Test doc\n---\n\nTest body\n"
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_toml_delimiters_not_checked() {
+        // TOML frontmatter with +++ delimiters should also be handled.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "+++\ntitle = \"a test title\"\n+++\n\ntest body\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // "title" as TOML key should NOT be flagged
+        // "test" in TOML quoted value SHOULD be flagged (line 2)
+        // "test" in body SHOULD be flagged (line 5)
+        assert_eq!(result.len(), 2, "Should flag TOML value and body: {result:?}");
+        let fm_violations: Vec<_> = result.iter().filter(|w| w.line == 2).collect();
+        assert_eq!(fm_violations.len(), 1, "Should flag 'test' in TOML value: {result:?}");
+        let body_violations: Vec<_> = result.iter().filter(|w| w.line == 5).collect();
+        assert_eq!(body_violations.len(), 1, "Should flag body 'test': {result:?}");
+    }
+
+    #[test]
+    fn test_frontmatter_toml_key_not_flagged() {
+        // TOML keys should NOT be flagged, only values.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "+++\ntest = \"other value\"\n+++\n\nBody text\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert!(
+            result.is_empty(),
+            "Should not flag TOML key that matches configured name: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_toml_fix_preserves_keys() {
+        // Fix should correct TOML values but preserve keys.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "+++\ntest = \"a test value\"\n+++\n\ntest here\n";
+        let ctx = create_context(content);
+        let fixed = rule.fix(&ctx).unwrap();
+
+        // Key "test" should remain lowercase; value "test" should become "Test"
+        assert_eq!(fixed, "+++\ntest = \"a Test value\"\n+++\n\nTest here\n");
+    }
+
+    #[test]
+    fn test_frontmatter_list_item_mapping_key_not_flagged() {
+        // In "- test: nested value", "test" is a YAML key within a list-item mapping.
+        // The key should NOT be flagged; only the value should be checked.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\nitems:\n  - test: nested value\n---\n\nBody text\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert!(
+            result.is_empty(),
+            "Should not flag YAML key in list-item mapping: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_list_item_mapping_value_flagged() {
+        // In "- key: test value", the value portion should be checked.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\nitems:\n  - key: a test value\n---\n\nBody text\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(
+            result.len(),
+            1,
+            "Should flag 'test' in list-item mapping value: {result:?}"
+        );
+        assert_eq!(result[0].line, 3);
+    }
+
+    #[test]
+    fn test_frontmatter_bare_list_item_still_flagged() {
+        // Bare list items without a colon (e.g., "- test") are values and should be flagged.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\ntags:\n  - test\n  - other\n---\n\nBody text\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(result.len(), 1, "Should flag 'test' in bare list item: {result:?}");
+        assert_eq!(result[0].line, 3);
+    }
+
+    #[test]
+    fn test_frontmatter_flow_mapping_not_flagged() {
+        // Flow mappings like {test: value} contain YAML keys that should not be flagged.
+        // The entire flow construct should be skipped.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\nflow_map: {test: value, other: test}\n---\n\nBody text\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert!(
+            result.is_empty(),
+            "Should not flag names inside flow mappings: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_flow_sequence_not_flagged() {
+        // Flow sequences like [test, other] should also be skipped.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\nitems: [test, other, test]\n---\n\nBody text\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert!(
+            result.is_empty(),
+            "Should not flag names inside flow sequences: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_frontmatter_list_item_mapping_fix_preserves_key() {
+        // Fix should correct values in list-item mappings but preserve keys.
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "---\nitems:\n  - test: a test value\n---\n\ntest here\n";
+        let ctx = create_context(content);
+        let fixed = rule.fix(&ctx).unwrap();
+
+        // "test" as list-item key should remain lowercase;
+        // "test" in value portion should become "Test"
+        assert_eq!(fixed, "---\nitems:\n  - test: a Test value\n---\n\nTest here\n");
     }
 }
