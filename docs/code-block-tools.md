@@ -64,9 +64,29 @@ json = { format = ["jq"] }
 
 Each language can have:
 
+- `enabled` - Whether tools are enabled for this language (default: `true`)
 - `lint` - List of tool IDs to run during `rumdl check`
 - `format` - List of tool IDs to run during `rumdl check --fix`
 - `on-error` - Override global error handling for this language
+
+### Disabling Tools for a Language
+
+Set `enabled = false` to acknowledge a language without configuring tools.
+This is useful in strict mode where you want to declare that a language
+is intentionally without lint/format tools:
+
+```toml
+[code-block-tools]
+enabled = true
+on-missing-language-definition = "fail"
+
+[code-block-tools.languages]
+python = { lint = ["ruff:check"], format = ["ruff:format"] }
+plaintext = { enabled = false }
+text = { enabled = false }
+```
+
+With this configuration, `plaintext` and `text` code blocks are silently skipped without triggering strict mode errors, while unconfigured languages still produce errors.
 
 ### Language Aliases
 
@@ -217,12 +237,14 @@ on-missing-tool-binary = "fail-fast"
 [code-block-tools.languages]
 python = { lint = ["ruff:check"], format = ["ruff:format"] }
 shell = { lint = ["shellcheck"], format = ["shfmt"] }
+plaintext = { enabled = false }
 ```
 
 With this configuration:
 
 - A Python code block without ruff installed will fail immediately
-- A JavaScript code block (no tools configured) will record an error but continue
+- A `plaintext` code block is silently skipped (acknowledged but no tools needed)
+- A JavaScript code block (not configured at all) will record an error but continue
 - The final exit code will be non-zero if any errors were recorded
 
 ## How It Works

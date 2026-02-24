@@ -902,8 +902,7 @@ fn test_should_lint_embedded_markdown_with_rumdl_tool() {
         "markdown".to_string(),
         LanguageToolConfig {
             lint: vec![RUMDL_BUILTIN_TOOL.to_string()],
-            format: vec![],
-            on_error: None,
+            ..Default::default()
         },
     );
     assert!(should_lint_embedded_markdown(&config));
@@ -921,8 +920,7 @@ fn test_should_lint_embedded_markdown_with_md_alias() {
         "md".to_string(),
         LanguageToolConfig {
             lint: vec![RUMDL_BUILTIN_TOOL.to_string()],
-            format: vec![],
-            on_error: None,
+            ..Default::default()
         },
     );
     assert!(should_lint_embedded_markdown(&config));
@@ -940,8 +938,7 @@ fn test_should_lint_embedded_markdown_with_other_tool() {
         "markdown".to_string(),
         LanguageToolConfig {
             lint: vec!["some-other-tool".to_string()],
-            format: vec![],
-            on_error: None,
+            ..Default::default()
         },
     );
     assert!(!should_lint_embedded_markdown(&config));

@@ -150,6 +150,7 @@ pub(super) fn should_lint_embedded_markdown(config: &rumdl_lib::code_block_tools
     // Also check "md" since it's a common alias
     for lang_key in ["markdown", "md"] {
         if let Some(lang_config) = config.languages.get(lang_key)
+            && lang_config.enabled
             && lang_config
                 .lint
                 .iter()

@@ -118,9 +118,15 @@ pub enum OnMissing {
 }
 
 /// Per-language tool configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub struct LanguageToolConfig {
+    /// Whether code block tools are enabled for this language (default: true).
+    /// Set to false to acknowledge a language without configuring tools.
+    /// This satisfies strict mode (on-missing-language-definition) checks.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
     /// Tools to run in lint mode (rumdl check)
     #[serde(default)]
     pub lint: Vec<String>,
@@ -132,6 +138,17 @@ pub struct LanguageToolConfig {
     /// Override global on-error setting for this language
     #[serde(default)]
     pub on_error: Option<OnError>,
+}
+
+impl Default for LanguageToolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            lint: Vec::new(),
+            format: Vec::new(),
+            on_error: None,
+        }
+    }
 }
 
 /// Definition of an external tool.
@@ -255,9 +272,8 @@ stdout = true
         config.languages.insert(
             "rust".to_string(),
             LanguageToolConfig {
-                lint: vec![],
                 format: vec!["rustfmt".to_string()],
-                on_error: None,
+                ..Default::default()
             },
         );
 
@@ -314,5 +330,86 @@ on-missing-language-definition = "{input}"
                 "Failed for variant: {input}"
             );
         }
+    }
+
+    #[test]
+    fn test_language_config_enabled_defaults_to_true() {
+        // Deserializing without `enabled` should default to true
+        let toml = r#"
+lint = ["ruff:check"]
+"#;
+        let config: LanguageToolConfig = toml::from_str(toml).expect("Failed to parse TOML");
+        assert!(config.enabled);
+        assert_eq!(config.lint, vec!["ruff:check"]);
+        assert!(config.format.is_empty());
+    }
+
+    #[test]
+    fn test_language_config_enabled_false() {
+        // Explicitly set enabled = false
+        let toml = r#"
+enabled = false
+"#;
+        let config: LanguageToolConfig = toml::from_str(toml).expect("Failed to parse TOML");
+        assert!(!config.enabled);
+        assert!(config.lint.is_empty());
+        assert!(config.format.is_empty());
+    }
+
+    #[test]
+    fn test_language_config_enabled_false_with_tools() {
+        // enabled=false should be respected even when tools are configured
+        let toml = r#"
+enabled = false
+lint = ["ruff:check"]
+format = ["ruff:format"]
+"#;
+        let config: LanguageToolConfig = toml::from_str(toml).expect("Failed to parse TOML");
+        assert!(!config.enabled);
+        assert_eq!(config.lint, vec!["ruff:check"]);
+        assert_eq!(config.format, vec!["ruff:format"]);
+    }
+
+    #[test]
+    fn test_language_config_enabled_in_full_config() {
+        // Test enabled field within a full CodeBlockToolsConfig
+        let toml = r#"
+enabled = true
+on-missing-language-definition = "fail"
+
+[languages.python]
+lint = ["ruff:check"]
+
+[languages.plaintext]
+enabled = false
+"#;
+        let config: CodeBlockToolsConfig = toml::from_str(toml).expect("Failed to parse TOML");
+
+        let python = config.languages.get("python").expect("Missing python config");
+        assert!(python.enabled);
+        assert_eq!(python.lint, vec!["ruff:check"]);
+
+        let plaintext = config.languages.get("plaintext").expect("Missing plaintext config");
+        assert!(!plaintext.enabled);
+        assert!(plaintext.lint.is_empty());
+    }
+
+    #[test]
+    fn test_language_config_default_trait() {
+        let config = LanguageToolConfig::default();
+        assert!(config.enabled);
+        assert!(config.lint.is_empty());
+        assert!(config.format.is_empty());
+        assert!(config.on_error.is_none());
+    }
+
+    #[test]
+    fn test_language_config_serialize_enabled_false() {
+        let config = LanguageToolConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let toml = toml::to_string_pretty(&config).expect("Failed to serialize");
+        assert!(toml.contains("enabled = false"));
     }
 }

@@ -494,7 +494,16 @@ impl<'a> CodeBlockToolProcessor<'a> {
             let canonical_lang = self.resolve_language(&block.language);
 
             // Get lint tools for this language
-            let lint_tools = match self.config.languages.get(&canonical_lang) {
+            let lang_config = self.config.languages.get(&canonical_lang);
+
+            // If language is explicitly configured with enabled=false, skip silently
+            if let Some(lc) = lang_config {
+                if !lc.enabled {
+                    continue;
+                }
+            }
+
+            let lint_tools = match lang_config {
                 Some(lc) if !lc.lint.is_empty() => &lc.lint,
                 _ => {
                     // No tools configured for this language in lint mode
@@ -628,7 +637,16 @@ impl<'a> CodeBlockToolProcessor<'a> {
             let canonical_lang = self.resolve_language(&block.language);
 
             // Get format tools for this language
-            let format_tools = match self.config.languages.get(&canonical_lang) {
+            let lang_config = self.config.languages.get(&canonical_lang);
+
+            // If language is explicitly configured with enabled=false, skip silently
+            if let Some(lc) = lang_config {
+                if !lc.enabled {
+                    continue;
+                }
+            }
+
+            let format_tools = match lang_config {
                 Some(lc) if !lc.format.is_empty() => &lc.format,
                 _ => {
                     // No tools configured for this language in format mode
@@ -1504,8 +1522,7 @@ fn main() {}
             "markdown".to_string(),
             LanguageToolConfig {
                 lint: vec![RUMDL_BUILTIN_TOOL.to_string()],
-                format: vec![],
-                on_error: None,
+                ..Default::default()
             },
         );
         config.on_missing_language_definition = OnMissing::Fail;
@@ -1526,9 +1543,8 @@ fn main() {}
         config.languages.insert(
             "markdown".to_string(),
             LanguageToolConfig {
-                lint: vec![],
                 format: vec![RUMDL_BUILTIN_TOOL.to_string()],
-                on_error: None,
+                ..Default::default()
             },
         );
         let processor = CodeBlockToolProcessor::new(&config, MarkdownFlavor::default());
@@ -1753,6 +1769,245 @@ fn main() {}
         assert_eq!(
             extracted, "    print('hi')\r\n",
             "Content offsets should be exact for CRLF"
+        );
+    }
+
+    #[test]
+    fn test_lint_enabled_false_skips_language_in_strict_mode() {
+        // With on-missing-language-definition = "fail", a language configured
+        // with enabled=false should be silently skipped (no error).
+        let mut config = default_config();
+        config.normalize_language = NormalizeLanguage::Exact;
+        config.on_missing_language_definition = OnMissing::Fail;
+
+        // Python has tools, plaintext is disabled
+        config.languages.insert(
+            "python".to_string(),
+            LanguageToolConfig {
+                lint: vec!["ruff:check".to_string()],
+                ..Default::default()
+            },
+        );
+        config.languages.insert(
+            "plaintext".to_string(),
+            LanguageToolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        let processor = CodeBlockToolProcessor::new(&config, MarkdownFlavor::default());
+
+        let content = "```plaintext\nsome text\n```";
+        let result = processor.lint(content);
+
+        // No error for plaintext: enabled=false satisfies strict mode
+        assert!(result.is_ok());
+        let diagnostics = result.unwrap();
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no diagnostics for disabled language, got: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn test_format_enabled_false_skips_language_in_strict_mode() {
+        // Same test but for format mode
+        let mut config = default_config();
+        config.normalize_language = NormalizeLanguage::Exact;
+        config.on_missing_language_definition = OnMissing::Fail;
+
+        config.languages.insert(
+            "plaintext".to_string(),
+            LanguageToolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        let processor = CodeBlockToolProcessor::new(&config, MarkdownFlavor::default());
+
+        let content = "```plaintext\nsome text\n```";
+        let result = processor.format(content);
+
+        // No error for plaintext: enabled=false satisfies strict mode
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(!output.had_errors, "Expected no errors for disabled language");
+        assert!(
+            output.error_messages.is_empty(),
+            "Expected no error messages, got: {:?}",
+            output.error_messages
+        );
+    }
+
+    #[test]
+    fn test_enabled_false_default_true_preserved() {
+        // Verify that when enabled is not set, it defaults to true (existing behavior)
+        let mut config = default_config();
+        config.on_missing_language_definition = OnMissing::Fail;
+
+        // Configure python without explicitly setting enabled
+        config.languages.insert(
+            "python".to_string(),
+            LanguageToolConfig {
+                lint: vec!["ruff:check".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let lang_config = config.languages.get("python").unwrap();
+        assert!(lang_config.enabled, "enabled should default to true");
+    }
+
+    #[test]
+    fn test_enabled_false_with_fail_fast_no_error() {
+        // Even with fail-fast, enabled=false should skip silently
+        let mut config = default_config();
+        config.normalize_language = NormalizeLanguage::Exact;
+        config.on_missing_language_definition = OnMissing::FailFast;
+
+        config.languages.insert(
+            "unknown".to_string(),
+            LanguageToolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        let processor = CodeBlockToolProcessor::new(&config, MarkdownFlavor::default());
+
+        let content = "```unknown\nsome content\n```";
+        let result = processor.lint(content);
+
+        // Should not return an error: enabled=false takes precedence over fail-fast
+        assert!(result.is_ok(), "Expected Ok but got Err: {result:?}");
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_enabled_false_format_with_fail_fast_no_error() {
+        // Same for format mode
+        let mut config = default_config();
+        config.normalize_language = NormalizeLanguage::Exact;
+        config.on_missing_language_definition = OnMissing::FailFast;
+
+        config.languages.insert(
+            "unknown".to_string(),
+            LanguageToolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        let processor = CodeBlockToolProcessor::new(&config, MarkdownFlavor::default());
+
+        let content = "```unknown\nsome content\n```";
+        let result = processor.format(content);
+
+        assert!(result.is_ok(), "Expected Ok but got Err: {result:?}");
+        let output = result.unwrap();
+        assert!(!output.had_errors);
+    }
+
+    #[test]
+    fn test_enabled_false_with_tools_still_skips() {
+        // If enabled=false but tools are listed, the language should still be skipped
+        let mut config = default_config();
+        config.on_missing_language_definition = OnMissing::Fail;
+
+        config.languages.insert(
+            "python".to_string(),
+            LanguageToolConfig {
+                enabled: false,
+                lint: vec!["ruff:check".to_string()],
+                format: vec!["ruff:format".to_string()],
+                on_error: None,
+            },
+        );
+
+        let processor = CodeBlockToolProcessor::new(&config, MarkdownFlavor::default());
+
+        let content = "```python\nprint('hello')\n```";
+
+        // Lint should skip
+        let lint_result = processor.lint(content);
+        assert!(lint_result.is_ok());
+        assert!(lint_result.unwrap().is_empty());
+
+        // Format should skip
+        let format_result = processor.format(content);
+        assert!(format_result.is_ok());
+        let output = format_result.unwrap();
+        assert!(!output.had_errors);
+        assert_eq!(output.content, content, "Content should be unchanged");
+    }
+
+    #[test]
+    fn test_enabled_true_without_tools_triggers_strict_mode() {
+        // A language configured with enabled=true (default) but no tools
+        // should still trigger strict mode errors
+        let mut config = default_config();
+        config.on_missing_language_definition = OnMissing::Fail;
+
+        config.languages.insert(
+            "python".to_string(),
+            LanguageToolConfig {
+                // enabled defaults to true, no tools
+                ..Default::default()
+            },
+        );
+
+        let processor = CodeBlockToolProcessor::new(&config, MarkdownFlavor::default());
+
+        let content = "```python\nprint('hello')\n```";
+        let result = processor.lint(content);
+
+        // Should report an error because enabled=true but no lint tools configured
+        assert!(result.is_ok());
+        let diagnostics = result.unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message.contains("No lint tools configured"));
+    }
+
+    #[test]
+    fn test_mixed_enabled_and_disabled_languages() {
+        // Multiple languages: one disabled, one unconfigured
+        let mut config = default_config();
+        config.normalize_language = NormalizeLanguage::Exact;
+        config.on_missing_language_definition = OnMissing::Fail;
+
+        config.languages.insert(
+            "plaintext".to_string(),
+            LanguageToolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        let processor = CodeBlockToolProcessor::new(&config, MarkdownFlavor::default());
+
+        let content = "\
+```plaintext
+some text
+```
+
+```javascript
+console.log('hi');
+```
+";
+
+        let result = processor.lint(content);
+        assert!(result.is_ok());
+        let diagnostics = result.unwrap();
+
+        // plaintext: skipped (enabled=false), no error
+        // javascript: not configured at all, should trigger strict mode error
+        assert_eq!(diagnostics.len(), 1, "Expected 1 diagnostic, got: {diagnostics:?}");
+        assert!(
+            diagnostics[0].message.contains("javascript"),
+            "Error should be about javascript, got: {}",
+            diagnostics[0].message
         );
     }
 }
