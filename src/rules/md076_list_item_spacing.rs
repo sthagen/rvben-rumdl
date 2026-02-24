@@ -1,5 +1,6 @@
 use crate::lint_context::LintContext;
 use crate::rule::{LintError, LintResult, LintWarning, Rule, Severity};
+use crate::utils::skip_context::is_table_line;
 
 /// Rule MD076: Enforce consistent blank lines between list items
 ///
@@ -76,33 +77,77 @@ impl MD076ListItemSpacing {
         }
     }
 
+    /// Check whether a non-blank line is structural content (code block, table, or HTML block)
+    /// whose trailing blank line is required by other rules (MD031, MD058).
+    fn is_structural_content(ctx: &LintContext, line_num: usize) -> bool {
+        if let Some(info) = ctx.line_info(line_num) {
+            // Inside a code block (includes the closing fence itself)
+            if info.in_code_block {
+                return true;
+            }
+            // Inside an HTML block
+            if info.in_html_block {
+                return true;
+            }
+            // A table row or separator
+            let content = info.content(ctx.content);
+            // Strip blockquote prefix and list continuation indent before checking table syntax
+            let effective = if let Some(ref bq) = info.blockquote {
+                bq.content.as_str()
+            } else {
+                content
+            };
+            if is_table_line(effective.trim_start()) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Determine whether the inter-item gap between two consecutive items is loose.
     ///
     /// Only considers blank lines that are actual inter-item separators: the
     /// consecutive blank lines immediately preceding the next item's marker.
-    /// Blank lines within a multi-paragraph item (followed by indented continuation
-    /// content) are not counted.
+    /// Blank lines required by MD031 (blanks-around-fences) or MD058 (blanks-around-tables)
+    /// after structural content (code blocks, tables, HTML blocks) are not counted as
+    /// inter-item separators.
     fn gap_is_loose(ctx: &LintContext, first: usize, next: usize) -> bool {
         if next <= first + 1 {
             return false;
         }
         // The gap is loose if the line immediately before the next item is blank.
-        // This correctly ignores blank lines within multi-paragraph items that
-        // are followed by continuation content rather than the next item marker.
-        Self::is_effectively_blank(ctx, next - 1)
+        if !Self::is_effectively_blank(ctx, next - 1) {
+            return false;
+        }
+        // Walk backwards past blank lines to find the last non-blank content line.
+        // If that line is structural content, the blank is required (not a separator).
+        let mut scan = next - 1;
+        while scan > first && Self::is_effectively_blank(ctx, scan) {
+            scan -= 1;
+        }
+        // `scan` is now the last non-blank line before the next item
+        if scan > first && Self::is_structural_content(ctx, scan) {
+            return false;
+        }
+        true
     }
 
     /// Collect the 1-indexed line numbers of all inter-item blank lines in the gap.
     ///
     /// Walks backwards from the line before `next` collecting consecutive blank lines.
     /// These are the actual separator lines between items, not blank lines within
-    /// multi-paragraph items.
+    /// multi-paragraph items. Structural blanks (after code blocks, tables, HTML blocks)
+    /// are excluded.
     fn inter_item_blanks(ctx: &LintContext, first: usize, next: usize) -> Vec<usize> {
         let mut blanks = Vec::new();
         let mut line_num = next - 1;
         while line_num > first && Self::is_effectively_blank(ctx, line_num) {
             blanks.push(line_num);
             line_num -= 1;
+        }
+        // If the last non-blank line is structural content, these blanks are structural
+        if line_num > first && Self::is_structural_content(ctx, line_num) {
+            return Vec::new();
         }
         blanks.reverse();
         blanks
@@ -592,6 +637,305 @@ mod tests {
         assert!(
             warnings.is_empty(),
             "Nested items should not cause parent-level warnings"
+        );
+    }
+
+    // ── Structural blank lines (code blocks, tables, HTML) ──────────
+
+    #[test]
+    fn code_block_in_tight_list_no_false_positive() {
+        // Blank line after closing fence is structural (required by MD031), not a separator
+        let content = "\
+- Item 1 with code:
+
+  ```python
+  print('hello')
+  ```
+
+- Item 2 simple.
+- Item 3 simple.
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "Structural blank after code block should not make item 1 appear loose"
+        );
+    }
+
+    #[test]
+    fn table_in_tight_list_no_false_positive() {
+        // Blank line after table is structural (required by MD058), not a separator
+        let content = "\
+- Item 1 with table:
+
+  | Col 1 | Col 2 |
+  |-------|-------|
+  | A     | B     |
+
+- Item 2 simple.
+- Item 3 simple.
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "Structural blank after table should not make item 1 appear loose"
+        );
+    }
+
+    #[test]
+    fn html_block_in_tight_list_no_false_positive() {
+        let content = "\
+- Item 1 with HTML:
+
+  <details>
+  <summary>Click</summary>
+  Content
+  </details>
+
+- Item 2 simple.
+- Item 3 simple.
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "Structural blank after HTML block should not make item 1 appear loose"
+        );
+    }
+
+    #[test]
+    fn mixed_code_and_table_in_tight_list() {
+        let content = "\
+1. Item with code:
+
+   ```markdown
+   This is some Markdown
+   ```
+
+1. Simple item.
+1. Item with table:
+
+   | Col 1 | Col 2 |
+   |:------|:------|
+   | Row 1 | Row 1 |
+   | Row 2 | Row 2 |
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "Mix of code blocks and tables should not cause false positives"
+        );
+    }
+
+    #[test]
+    fn code_block_with_genuinely_loose_gaps_still_warns() {
+        // Item 1 has structural blank (code block), items 2-3 have genuine blank separator
+        // Items 2-3 are genuinely loose, item 3-4 is tight → inconsistent
+        let content = "\
+- Item 1:
+
+  ```bash
+  echo hi
+  ```
+
+- Item 2
+
+- Item 3
+- Item 4
+";
+        let warnings = check(content, ListItemSpacingStyle::Consistent);
+        assert!(
+            !warnings.is_empty(),
+            "Genuine inconsistency with code blocks should still be flagged"
+        );
+    }
+
+    #[test]
+    fn all_items_have_code_blocks_no_warnings() {
+        let content = "\
+- Item 1:
+
+  ```python
+  print(1)
+  ```
+
+- Item 2:
+
+  ```python
+  print(2)
+  ```
+
+- Item 3:
+
+  ```python
+  print(3)
+  ```
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "All items with code blocks should be consistently tight"
+        );
+    }
+
+    #[test]
+    fn tilde_fence_code_block_in_list() {
+        let content = "\
+- Item 1:
+
+  ~~~
+  code here
+  ~~~
+
+- Item 2 simple.
+- Item 3 simple.
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "Tilde fences should be recognized as structural content"
+        );
+    }
+
+    #[test]
+    fn nested_list_with_code_block() {
+        let content = "\
+- Item 1
+  - Nested with code:
+
+    ```
+    nested code
+    ```
+
+  - Nested simple.
+- Item 2
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "Nested list with code block should not cause false positives"
+        );
+    }
+
+    #[test]
+    fn tight_style_with_code_block_no_warnings() {
+        let content = "\
+- Item 1:
+
+  ```
+  code
+  ```
+
+- Item 2.
+- Item 3.
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Tight).is_empty(),
+            "Tight style should not warn about structural blanks around code blocks"
+        );
+    }
+
+    #[test]
+    fn loose_style_with_code_block_missing_separator() {
+        // Loose style requires blank line between every pair of items.
+        // Items 2-3 have no blank → should warn
+        let content = "\
+- Item 1:
+
+  ```
+  code
+  ```
+
+- Item 2.
+- Item 3.
+";
+        let warnings = check(content, ListItemSpacingStyle::Loose);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "Loose style should still require blank between simple items"
+        );
+        assert!(warnings[0].message.contains("Missing"));
+    }
+
+    #[test]
+    fn blockquote_list_with_code_block() {
+        let content = "\
+> - Item 1:
+>
+>   ```
+>   code
+>   ```
+>
+> - Item 2.
+> - Item 3.
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "Blockquote-prefixed list with code block should not cause false positives"
+        );
+    }
+
+    // ── Indented code block (not fenced) in list item ─────────────────
+
+    #[test]
+    fn indented_code_block_in_list_no_false_positive() {
+        // A 4-space indented code block inside a list item should be treated
+        // as structural content, not trigger a loose gap detection.
+        let content = "\
+1. Item with indented code:
+
+       some code here
+       more code
+
+1. Simple item
+1. Another item
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "Structural blank after indented code block should not make item 1 appear loose"
+        );
+    }
+
+    // ── Code block in middle of item with text after ────────────────
+
+    #[test]
+    fn code_block_in_middle_of_item_text_after_is_genuinely_loose() {
+        // When a code block is in the middle of an item and there's regular text
+        // after it, a blank line before the next item IS a genuine separator (loose),
+        // not structural. The last non-blank line before item 2 is "Some text after
+        // the code block." which is NOT structural content.
+        let content = "\
+1. Item with code in middle:
+
+   ```
+   code
+   ```
+
+   Some text after the code block.
+
+1. Simple item
+1. Another item
+";
+        let warnings = check(content, ListItemSpacingStyle::Consistent);
+        assert!(
+            !warnings.is_empty(),
+            "Blank line after regular text (not structural content) is a genuine loose gap"
+        );
+    }
+
+    // ── Fix: tight mode preserves structural blanks ──────────────────
+
+    #[test]
+    fn tight_fix_preserves_structural_blanks_around_code_blocks() {
+        // When style is tight, the fix should NOT remove structural blank lines
+        // around code blocks inside list items. Those blanks are required by MD031.
+        let content = "\
+- Item 1:
+
+  ```
+  code
+  ```
+
+- Item 2.
+- Item 3.
+";
+        let fixed = fix(content, ListItemSpacingStyle::Tight);
+        assert_eq!(
+            fixed, content,
+            "Tight fix should not remove structural blanks around code blocks"
         );
     }
 
