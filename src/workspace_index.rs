@@ -95,7 +95,7 @@ static URL_EXTRACT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"]\(\s*([^>)\s#]+)(#[^)\s]*)?\s*(?:"[^"]*")?\s*\)"#).unwrap());
 
 /// Regex to detect URLs with explicit schemes
-static PROTOCOL_DOMAIN_REGEX: LazyLock<Regex> =
+pub(crate) static PROTOCOL_DOMAIN_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([a-zA-Z][a-zA-Z0-9+.-]*://|[a-zA-Z][a-zA-Z0-9+.-]*:|www\.)").unwrap());
 
 /// Supported markdown file extensions

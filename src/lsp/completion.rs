@@ -530,6 +530,6 @@ pub(super) fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> Option<usize
 /// Convert a byte offset to the corresponding UTF-16 code unit offset in a UTF-8 string.
 ///
 /// Panics if `byte_offset` is not on a character boundary.
-fn byte_to_utf16_offset(s: &str, byte_offset: usize) -> u32 {
+pub(super) fn byte_to_utf16_offset(s: &str, byte_offset: usize) -> u32 {
     s[..byte_offset].chars().map(|c| c.len_utf16() as u32).sum()
 }

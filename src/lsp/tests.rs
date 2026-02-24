@@ -3945,6 +3945,237 @@ async fn test_find_references_includes_same_file_fragment_links() {
 }
 
 // =============================================================================
+// Navigation: external URL returns None
+// =============================================================================
+
+#[tokio::test]
+async fn test_goto_definition_external_url_returns_none() {
+    let server = create_test_server();
+
+    let file = std::path::PathBuf::from("/tmp/rumdl-nav-url-test/readme.md");
+    let uri = Url::from_file_path(&file).unwrap();
+
+    let content = "See [example](https://example.com) for details.\n";
+    server.documents.write().await.insert(
+        uri.clone(),
+        DocumentEntry {
+            content: content.to_string(),
+            version: Some(1),
+            from_disk: false,
+        },
+    );
+
+    // Cursor on "https://example.com"
+    let position = Position { line: 0, character: 18 };
+    let result = server.handle_goto_definition(&uri, position).await;
+    assert!(result.is_none(), "Should return None for external URLs");
+}
+
+#[tokio::test]
+async fn test_goto_definition_mailto_returns_none() {
+    let server = create_test_server();
+
+    let file = std::path::PathBuf::from("/tmp/rumdl-nav-mailto-test/readme.md");
+    let uri = Url::from_file_path(&file).unwrap();
+
+    let content = "Email [us](mailto:info@example.com) for help.\n";
+    server.documents.write().await.insert(
+        uri.clone(),
+        DocumentEntry {
+            content: content.to_string(),
+            version: Some(1),
+            from_disk: false,
+        },
+    );
+
+    let position = Position { line: 0, character: 15 };
+    let result = server.handle_goto_definition(&uri, position).await;
+    assert!(result.is_none(), "Should return None for mailto: links");
+}
+
+// =============================================================================
+// Navigation: reference-style links
+// =============================================================================
+
+#[tokio::test]
+async fn test_goto_definition_reference_link() {
+    use crate::workspace_index::{FileIndex, HeadingIndex};
+
+    let server = create_test_server();
+
+    let docs_dir = std::path::PathBuf::from("/tmp/rumdl-nav-ref-test/docs");
+    let current_file = docs_dir.join("index.md");
+    let target_file = docs_dir.join("guide.md");
+
+    let current_uri = Url::from_file_path(&current_file).unwrap();
+
+    // Full reference link: [click here][guide]
+    let content = "# Index\n\nSee [click here][guide] for info.\n\n[guide]: guide.md#install\n";
+    server.documents.write().await.insert(
+        current_uri.clone(),
+        DocumentEntry {
+            content: content.to_string(),
+            version: Some(1),
+            from_disk: false,
+        },
+    );
+
+    {
+        let mut index = server.workspace_index.write().await;
+        let mut fi = FileIndex::default();
+        fi.add_heading(HeadingIndex {
+            text: "Installation".to_string(),
+            auto_anchor: "installation".to_string(),
+            custom_anchor: Some("install".to_string()),
+            line: 10,
+        });
+        index.insert_file(target_file.clone(), fi);
+    }
+
+    // Cursor on "click here" — inside the first bracket pair
+    let position = Position { line: 2, character: 8 };
+    let result = server.handle_goto_definition(&current_uri, position).await;
+    assert!(result.is_some(), "Should resolve full reference link");
+
+    if let Some(GotoDefinitionResponse::Scalar(location)) = result {
+        assert_eq!(
+            location.uri,
+            Url::from_file_path(&target_file).unwrap(),
+            "Should point to guide.md"
+        );
+        assert_eq!(location.range.start.line, 9, "Should target the install heading");
+    } else {
+        panic!("Expected Scalar response");
+    }
+}
+
+#[tokio::test]
+async fn test_goto_definition_collapsed_reference() {
+    use crate::workspace_index::{FileIndex, HeadingIndex};
+
+    let server = create_test_server();
+
+    let docs_dir = std::path::PathBuf::from("/tmp/rumdl-nav-collapsed-test/docs");
+    let current_file = docs_dir.join("index.md");
+    let target_file = docs_dir.join("guide.md");
+
+    let current_uri = Url::from_file_path(&current_file).unwrap();
+
+    // Collapsed reference: [guide][]
+    let content = "# Index\n\nSee [guide][] for info.\n\n[guide]: guide.md\n";
+    server.documents.write().await.insert(
+        current_uri.clone(),
+        DocumentEntry {
+            content: content.to_string(),
+            version: Some(1),
+            from_disk: false,
+        },
+    );
+
+    {
+        let mut index = server.workspace_index.write().await;
+        let mut fi = FileIndex::default();
+        fi.add_heading(HeadingIndex {
+            text: "Guide".to_string(),
+            auto_anchor: "guide".to_string(),
+            custom_anchor: None,
+            line: 1,
+        });
+        index.insert_file(target_file.clone(), fi);
+    }
+
+    // Cursor on "guide" in [guide][]
+    let position = Position { line: 2, character: 7 };
+    let result = server.handle_goto_definition(&current_uri, position).await;
+    assert!(result.is_some(), "Should resolve collapsed reference link");
+
+    if let Some(GotoDefinitionResponse::Scalar(location)) = result {
+        assert_eq!(
+            location.uri,
+            Url::from_file_path(&target_file).unwrap(),
+            "Should point to guide.md"
+        );
+    } else {
+        panic!("Expected Scalar response");
+    }
+}
+
+#[tokio::test]
+async fn test_goto_definition_reference_definition_line() {
+    use crate::workspace_index::{FileIndex, HeadingIndex};
+
+    let server = create_test_server();
+
+    let docs_dir = std::path::PathBuf::from("/tmp/rumdl-nav-refdef-test/docs");
+    let current_file = docs_dir.join("index.md");
+    let target_file = docs_dir.join("guide.md");
+
+    let current_uri = Url::from_file_path(&current_file).unwrap();
+
+    // Cursor on the reference definition line itself
+    let content = "# Index\n\n[guide]: guide.md#install\n";
+    server.documents.write().await.insert(
+        current_uri.clone(),
+        DocumentEntry {
+            content: content.to_string(),
+            version: Some(1),
+            from_disk: false,
+        },
+    );
+
+    {
+        let mut index = server.workspace_index.write().await;
+        let mut fi = FileIndex::default();
+        fi.add_heading(HeadingIndex {
+            text: "Installation".to_string(),
+            auto_anchor: "installation".to_string(),
+            custom_anchor: Some("install".to_string()),
+            line: 10,
+        });
+        index.insert_file(target_file.clone(), fi);
+    }
+
+    // Cursor on the definition line
+    let position = Position { line: 2, character: 5 };
+    let result = server.handle_goto_definition(&current_uri, position).await;
+    assert!(result.is_some(), "Should navigate from reference definition line");
+
+    if let Some(GotoDefinitionResponse::Scalar(location)) = result {
+        assert_eq!(location.uri, Url::from_file_path(&target_file).unwrap(),);
+        assert_eq!(location.range.start.line, 9);
+    } else {
+        panic!("Expected Scalar response");
+    }
+}
+
+#[tokio::test]
+async fn test_goto_definition_reference_link_external_url() {
+    let server = create_test_server();
+
+    let file = std::path::PathBuf::from("/tmp/rumdl-nav-ref-ext-test/readme.md");
+    let uri = Url::from_file_path(&file).unwrap();
+
+    // Reference link that resolves to an external URL
+    let content = "See [example] for info.\n\n[example]: https://example.com\n";
+    server.documents.write().await.insert(
+        uri.clone(),
+        DocumentEntry {
+            content: content.to_string(),
+            version: Some(1),
+            from_disk: false,
+        },
+    );
+
+    // Cursor on "example" in [example]
+    let position = Position { line: 0, character: 7 };
+    let result = server.handle_goto_definition(&uri, position).await;
+    assert!(
+        result.is_none(),
+        "Should return None for reference link resolving to external URL"
+    );
+}
+
+// =============================================================================
 // Narrow range / Zed code_actions_on_format tests
 // =============================================================================
 
