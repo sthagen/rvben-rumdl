@@ -288,6 +288,18 @@ impl MarkdownlintConfig {
             let mapped = markdownlint_to_rumdl_rule_key(key);
             if let Some(rumdl_key) = mapped {
                 let norm_rule_key = rumdl_key.to_ascii_uppercase();
+
+                // Preserve the original key as the display name for import output.
+                // If the user wrote "line-length", output [line-length] not [MD013].
+                let display_name = if key.to_ascii_uppercase() == norm_rule_key {
+                    norm_rule_key.clone()
+                } else {
+                    key.to_lowercase().replace('_', "-")
+                };
+                fragment
+                    .rule_display_names
+                    .insert(norm_rule_key.clone(), display_name.clone());
+
                 // Special handling for boolean values (true/false)
                 if value.is_bool() {
                     let enabled = value.as_bool().unwrap_or(false);
@@ -295,13 +307,13 @@ impl MarkdownlintConfig {
                         // default: true — all rules on by default
                         // true → no-op (already enabled), false → disable
                         if !enabled {
-                            disabled_rules.push(norm_rule_key.clone());
+                            disabled_rules.push(display_name);
                         }
                     } else {
                         // default: false — all rules off by default
                         // true → enable, false → no-op (already disabled)
                         if enabled {
-                            enabled_rules.push(norm_rule_key.clone());
+                            enabled_rules.push(display_name);
                         }
                     }
                     continue;
@@ -384,7 +396,7 @@ impl MarkdownlintConfig {
 
                     // When default: false, rules with object configs are explicitly enabled
                     if !default_enabled {
-                        enabled_rules.push(norm_rule_key.clone());
+                        enabled_rules.push(display_name.clone());
                     }
                 }
             }
@@ -1047,5 +1059,131 @@ ul-style:
             fragment.global.enable.source,
             crate::config::ConfigSource::ProjectConfig,
         );
+    }
+
+    #[test]
+    fn test_import_preserves_aliases_in_rules() {
+        let mut config_map = HashMap::new();
+        config_map.insert(
+            "line-length".to_string(),
+            serde_yml::Value::Mapping({
+                let mut map = serde_yml::Mapping::new();
+                map.insert(
+                    serde_yml::Value::String("line_length".to_string()),
+                    serde_yml::Value::Number(serde_yml::Number::from(120)),
+                );
+                map
+            }),
+        );
+        config_map.insert("no-bare-urls".to_string(), serde_yml::Value::Bool(false));
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        assert_eq!(fragment.rule_display_names.get("MD013").unwrap(), "line-length");
+        assert_eq!(fragment.rule_display_names.get("MD034").unwrap(), "no-bare-urls");
+    }
+
+    #[test]
+    fn test_import_preserves_canonical_ids() {
+        let mut config_map = HashMap::new();
+        config_map.insert(
+            "MD013".to_string(),
+            serde_yml::Value::Mapping({
+                let mut map = serde_yml::Mapping::new();
+                map.insert(
+                    serde_yml::Value::String("line_length".to_string()),
+                    serde_yml::Value::Number(serde_yml::Number::from(120)),
+                );
+                map
+            }),
+        );
+        config_map.insert("MD034".to_string(), serde_yml::Value::Bool(false));
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        assert_eq!(fragment.rule_display_names.get("MD013").unwrap(), "MD013");
+        assert_eq!(fragment.rule_display_names.get("MD034").unwrap(), "MD034");
+        assert!(fragment.global.disable.value.contains(&"MD034".to_string()));
+    }
+
+    #[test]
+    fn test_import_mixed_aliases_and_ids() {
+        let mut config_map = HashMap::new();
+        config_map.insert(
+            "line-length".to_string(),
+            serde_yml::Value::Mapping({
+                let mut map = serde_yml::Mapping::new();
+                map.insert(
+                    serde_yml::Value::String("line_length".to_string()),
+                    serde_yml::Value::Number(serde_yml::Number::from(120)),
+                );
+                map
+            }),
+        );
+        config_map.insert("MD034".to_string(), serde_yml::Value::Bool(false));
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        // Alias is preserved
+        assert_eq!(fragment.rule_display_names.get("MD013").unwrap(), "line-length");
+        // Canonical ID is preserved
+        assert_eq!(fragment.rule_display_names.get("MD034").unwrap(), "MD034");
+    }
+
+    #[test]
+    fn test_import_disable_list_uses_aliases() {
+        let mut config_map = HashMap::new();
+        config_map.insert("line-length".to_string(), serde_yml::Value::Bool(false));
+        config_map.insert("no-bare-urls".to_string(), serde_yml::Value::Bool(false));
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        let mut disable_sorted = fragment.global.disable.value.clone();
+        disable_sorted.sort();
+        assert_eq!(disable_sorted, vec!["line-length", "no-bare-urls"]);
+    }
+
+    #[test]
+    fn test_import_enable_list_uses_aliases_when_default_false() {
+        let mut config_map = HashMap::new();
+        config_map.insert("default".to_string(), serde_yml::Value::Bool(false));
+        config_map.insert("line-length".to_string(), serde_yml::Value::Bool(true));
+        config_map.insert("no-bare-urls".to_string(), serde_yml::Value::Bool(true));
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        let mut enable_sorted = fragment.global.enable.value.clone();
+        enable_sorted.sort();
+        assert_eq!(enable_sorted, vec!["line-length", "no-bare-urls"]);
+    }
+
+    #[test]
+    fn test_import_underscore_aliases_normalized_to_kebab() {
+        let mut config_map = HashMap::new();
+        config_map.insert("no_bare_urls".to_string(), serde_yml::Value::Bool(false));
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        // Underscores in the original key are normalized to kebab-case
+        assert_eq!(fragment.rule_display_names.get("MD034").unwrap(), "no-bare-urls");
+        assert!(fragment.global.disable.value.contains(&"no-bare-urls".to_string()));
+    }
+
+    #[test]
+    fn test_import_case_insensitive_alias_preserved_lowercase() {
+        let mut config_map = HashMap::new();
+        config_map.insert("Line-Length".to_string(), serde_yml::Value::Bool(false));
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        // Display name is lowercased
+        assert_eq!(fragment.rule_display_names.get("MD013").unwrap(), "line-length");
     }
 }

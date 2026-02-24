@@ -203,6 +203,10 @@ pub struct SourcedConfigFragment {
     pub per_file_flavor: SourcedValue<IndexMap<String, MarkdownFlavor>>,
     pub code_block_tools: SourcedValue<crate::code_block_tools::CodeBlockToolsConfig>,
     pub rules: BTreeMap<String, SourcedRuleConfig>,
+    /// Maps canonical rule IDs to their preferred display names (used by import).
+    /// When importing from markdownlint configs, this preserves the user's original
+    /// naming preference (e.g., "line-length" instead of "MD013").
+    pub rule_display_names: HashMap<String, String>,
     pub unknown_keys: Vec<(String, String, Option<String>)>, // (section, key, file_path)
                                                              // Note: loaded_files is tracked globally in SourcedConfig.
 }
@@ -219,6 +223,7 @@ impl Default for SourcedConfigFragment {
                 ConfigSource::Default,
             ),
             rules: BTreeMap::new(),
+            rule_display_names: HashMap::new(),
             unknown_keys: Vec::new(),
         }
     }

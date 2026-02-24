@@ -70,7 +70,7 @@ pub fn handle_import(file: String, output: Option<String>, format: Format, dry_r
     }
 }
 
-fn generate_toml_output(fragment: &rumdl_lib::config::SourcedConfigFragment, is_pyproject: bool) -> String {
+pub(crate) fn generate_toml_output(fragment: &rumdl_lib::config::SourcedConfigFragment, is_pyproject: bool) -> String {
     let mut output = String::new();
 
     // For pyproject.toml, wrap everything in [tool.rumdl]
@@ -105,7 +105,12 @@ fn generate_toml_output(fragment: &rumdl_lib::config::SourcedConfigFragment, is_
     // Add rule-specific settings
     for (rule_name, rule_config) in &fragment.rules {
         if !rule_config.values.is_empty() {
-            output.push_str(&format!("[{section_prefix}{rule_name}]\n"));
+            let display = fragment
+                .rule_display_names
+                .get(rule_name)
+                .map(String::as_str)
+                .unwrap_or(rule_name);
+            output.push_str(&format!("[{section_prefix}{display}]\n"));
             for (key, sourced_value) in &rule_config.values {
                 // Skip the generic "value" key if we have more specific keys
                 if key == "value" && rule_config.values.len() > 1 {
@@ -159,7 +164,7 @@ fn format_toml_value_line(output: &mut String, key: &str, value: &toml::Value) {
     }
 }
 
-fn generate_json_output(fragment: &rumdl_lib::config::SourcedConfigFragment) -> String {
+pub(crate) fn generate_json_output(fragment: &rumdl_lib::config::SourcedConfigFragment) -> String {
     let mut json_config = serde_json::Map::new();
 
     // Add global settings
@@ -244,7 +249,12 @@ fn generate_json_output(fragment: &rumdl_lib::config::SourcedConfigFragment) -> 
                     rule_obj.insert(key.clone(), json_value);
                 }
             }
-            json_config.insert(rule_name.clone(), serde_json::Value::Object(rule_obj));
+            let display = fragment
+                .rule_display_names
+                .get(rule_name)
+                .map(String::as_str)
+                .unwrap_or(rule_name);
+            json_config.insert(display.to_string(), serde_json::Value::Object(rule_obj));
         }
     }
 
@@ -254,4 +264,159 @@ fn generate_json_output(fragment: &rumdl_lib::config::SourcedConfigFragment) -> 
     });
     json.push('\n');
     json
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rumdl_lib::markdownlint_config::MarkdownlintConfig;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_generate_toml_output_with_display_names() {
+        let mut config_map = HashMap::new();
+        config_map.insert(
+            "line-length".to_string(),
+            serde_yml::Value::Mapping({
+                let mut map = serde_yml::Mapping::new();
+                map.insert(
+                    serde_yml::Value::String("line_length".to_string()),
+                    serde_yml::Value::Number(serde_yml::Number::from(120)),
+                );
+                map
+            }),
+        );
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        let toml_output = generate_toml_output(&fragment, false);
+        assert!(
+            toml_output.contains("[line-length]"),
+            "TOML output should use alias 'line-length', got:\n{toml_output}"
+        );
+        assert!(
+            !toml_output.contains("[MD013]"),
+            "TOML output should NOT contain canonical ID 'MD013', got:\n{toml_output}"
+        );
+    }
+
+    #[test]
+    fn test_generate_toml_output_with_canonical_ids() {
+        let mut config_map = HashMap::new();
+        config_map.insert(
+            "MD013".to_string(),
+            serde_yml::Value::Mapping({
+                let mut map = serde_yml::Mapping::new();
+                map.insert(
+                    serde_yml::Value::String("line_length".to_string()),
+                    serde_yml::Value::Number(serde_yml::Number::from(120)),
+                );
+                map
+            }),
+        );
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        let toml_output = generate_toml_output(&fragment, false);
+        assert!(
+            toml_output.contains("[MD013]"),
+            "TOML output should use canonical ID 'MD013', got:\n{toml_output}"
+        );
+    }
+
+    #[test]
+    fn test_generate_toml_output_pyproject_with_display_names() {
+        let mut config_map = HashMap::new();
+        config_map.insert(
+            "line-length".to_string(),
+            serde_yml::Value::Mapping({
+                let mut map = serde_yml::Mapping::new();
+                map.insert(
+                    serde_yml::Value::String("line_length".to_string()),
+                    serde_yml::Value::Number(serde_yml::Number::from(120)),
+                );
+                map
+            }),
+        );
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        let toml_output = generate_toml_output(&fragment, true);
+        assert!(
+            toml_output.contains("[tool.rumdl.line-length]"),
+            "pyproject TOML output should use alias with prefix, got:\n{toml_output}"
+        );
+    }
+
+    #[test]
+    fn test_generate_json_output_with_display_names() {
+        let mut config_map = HashMap::new();
+        config_map.insert(
+            "line-length".to_string(),
+            serde_yml::Value::Mapping({
+                let mut map = serde_yml::Mapping::new();
+                map.insert(
+                    serde_yml::Value::String("line_length".to_string()),
+                    serde_yml::Value::Number(serde_yml::Number::from(120)),
+                );
+                map
+            }),
+        );
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        let json_output = generate_json_output(&fragment);
+        assert!(
+            json_output.contains("\"line-length\""),
+            "JSON output should use alias 'line-length', got:\n{json_output}"
+        );
+        assert!(
+            !json_output.contains("\"MD013\""),
+            "JSON output should NOT contain canonical ID 'MD013', got:\n{json_output}"
+        );
+    }
+
+    #[test]
+    fn test_generate_toml_output_disable_list_with_aliases() {
+        let mut config_map = HashMap::new();
+        config_map.insert("line-length".to_string(), serde_yml::Value::Bool(false));
+        config_map.insert("no-bare-urls".to_string(), serde_yml::Value::Bool(false));
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        let toml_output = generate_toml_output(&fragment, false);
+        assert!(
+            toml_output.contains("line-length") && toml_output.contains("no-bare-urls"),
+            "TOML disable list should use aliases, got:\n{toml_output}"
+        );
+        assert!(
+            !toml_output.contains("MD013") && !toml_output.contains("MD034"),
+            "TOML disable list should NOT contain canonical IDs, got:\n{toml_output}"
+        );
+    }
+
+    #[test]
+    fn test_generate_json_output_disable_list_with_aliases() {
+        let mut config_map = HashMap::new();
+        config_map.insert("line-length".to_string(), serde_yml::Value::Bool(false));
+        config_map.insert("no-bare-urls".to_string(), serde_yml::Value::Bool(false));
+
+        let mdl_config = MarkdownlintConfig(config_map);
+        let fragment = mdl_config.map_to_sourced_rumdl_config_fragment(Some("test.json"));
+
+        let json_output = generate_json_output(&fragment);
+        assert!(
+            json_output.contains("line-length") && json_output.contains("no-bare-urls"),
+            "JSON disable list should use aliases, got:\n{json_output}"
+        );
+        assert!(
+            !json_output.contains("MD013") && !json_output.contains("MD034"),
+            "JSON disable list should NOT contain canonical IDs, got:\n{json_output}"
+        );
+    }
 }
