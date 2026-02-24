@@ -64,9 +64,18 @@ type WarningPosition = (usize, usize, String); // (line, column, found_name)
 /// When fixing issues, this rule replaces incorrect capitalization with the correct form
 /// as defined in the configuration.
 ///
-/// Check if a trimmed line is an inline config comment (rumdl or markdownlint directives).
+/// Check if a trimmed line is an inline config comment from a linting tool.
+/// Recognized tools: rumdl, markdownlint, Vale, and remark-lint.
 fn is_inline_config_comment(trimmed: &str) -> bool {
-    trimmed.starts_with("<!-- rumdl-") || trimmed.starts_with("<!-- markdownlint-")
+    trimmed.starts_with("<!-- rumdl-")
+        || trimmed.starts_with("<!-- markdownlint-")
+        || trimmed.starts_with("<!-- vale off")
+        || trimmed.starts_with("<!-- vale on")
+        || (trimmed.starts_with("<!-- vale ") && trimmed.contains(" = "))
+        || trimmed.starts_with("<!-- vale style")
+        || trimmed.starts_with("<!-- lint disable ")
+        || trimmed.starts_with("<!-- lint enable ")
+        || trimmed.starts_with("<!-- lint ignore ")
 }
 
 #[derive(Clone)]
@@ -282,7 +291,7 @@ impl MD044ProperNames {
                 continue;
             }
 
-            // Skip inline config comments (rumdl-disable, markdownlint-enable, etc.)
+            // Skip inline config comments (rumdl, markdownlint, Vale, remark-lint directives)
             if is_inline_config_comment(trimmed) {
                 continue;
             }
@@ -2309,5 +2318,198 @@ Visit [github documentation](https://github.com/docs) for details.
             "<https://test.example.com",
             10
         ));
+    }
+
+    #[test]
+    fn test_vale_inline_config_comments_not_flagged() {
+        let config = MD044Config {
+            names: vec!["Vale".to_string(), "JavaScript".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "\
+<!-- vale off -->
+Some javascript text here.
+<!-- vale on -->
+<!-- vale Style.Rule = NO -->
+More javascript text.
+<!-- vale Style.Rule = YES -->
+<!-- vale JavaScript.Grammar = NO -->
+";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // Only the body text lines (2, 5) should be flagged for "javascript"
+        assert_eq!(result.len(), 2, "Should only flag body lines, not Vale config comments");
+        assert_eq!(result[0].line, 2);
+        assert_eq!(result[1].line, 5);
+    }
+
+    #[test]
+    fn test_remark_lint_inline_config_comments_not_flagged() {
+        let config = MD044Config {
+            names: vec!["JavaScript".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "\
+<!-- lint disable remark-lint-some-rule -->
+Some javascript text here.
+<!-- lint enable remark-lint-some-rule -->
+<!-- lint ignore remark-lint-some-rule -->
+More javascript text.
+";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(
+            result.len(),
+            2,
+            "Should only flag body lines, not remark-lint config comments"
+        );
+        assert_eq!(result[0].line, 2);
+        assert_eq!(result[1].line, 5);
+    }
+
+    #[test]
+    fn test_fix_does_not_modify_vale_remark_lint_comments() {
+        let config = MD044Config {
+            names: vec!["JavaScript".to_string(), "Vale".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "\
+<!-- vale off -->
+Some javascript text.
+<!-- vale on -->
+<!-- lint disable remark-lint-some-rule -->
+More javascript text.
+<!-- lint enable remark-lint-some-rule -->
+";
+        let ctx = create_context(content);
+        let fixed = rule.fix(&ctx).unwrap();
+
+        // Config directive lines must be preserved unchanged
+        assert!(fixed.contains("<!-- vale off -->"));
+        assert!(fixed.contains("<!-- vale on -->"));
+        assert!(fixed.contains("<!-- lint disable remark-lint-some-rule -->"));
+        assert!(fixed.contains("<!-- lint enable remark-lint-some-rule -->"));
+        // Body text should be fixed
+        assert!(fixed.contains("Some JavaScript text."));
+        assert!(fixed.contains("More JavaScript text."));
+    }
+
+    #[test]
+    fn test_mixed_tool_directives_all_skipped() {
+        let config = MD044Config {
+            names: vec!["JavaScript".to_string(), "Vale".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "\
+<!-- rumdl-disable MD044 -->
+Some javascript text.
+<!-- markdownlint-disable -->
+More javascript text.
+<!-- vale off -->
+Even more javascript text.
+<!-- lint disable some-rule -->
+Final javascript text.
+<!-- rumdl-enable MD044 -->
+<!-- markdownlint-enable -->
+<!-- vale on -->
+<!-- lint enable some-rule -->
+";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // Only body text lines should be flagged (lines 2, 4, 6, 8)
+        assert_eq!(
+            result.len(),
+            4,
+            "Should only flag body lines, not any tool directive comments"
+        );
+        assert_eq!(result[0].line, 2);
+        assert_eq!(result[1].line, 4);
+        assert_eq!(result[2].line, 6);
+        assert_eq!(result[3].line, 8);
+    }
+
+    #[test]
+    fn test_vale_remark_lint_edge_cases_not_matched() {
+        let config = MD044Config {
+            names: vec!["JavaScript".to_string(), "Vale".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        // These are regular HTML comments, NOT tool directives:
+        // - "<!-- vale -->" is not a valid Vale directive (no action keyword)
+        // - "<!-- vale is a tool -->" starts with "vale" but is prose, not a directive
+        // - "<!-- valedictorian javascript -->" does not start with "<!-- vale "
+        // - "<!-- linting javascript tips -->" does not start with "<!-- lint "
+        // - "<!-- vale javascript -->" starts with "vale" but has no action keyword
+        // - "<!-- lint your javascript code -->" starts with "lint" but has no action keyword
+        let content = "\
+<!-- vale -->
+<!-- vale is a tool for writing -->
+<!-- valedictorian javascript -->
+<!-- linting javascript tips -->
+<!-- vale javascript -->
+<!-- lint your javascript code -->
+";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // Line 1: "<!-- vale -->" contains "vale" (wrong case for "Vale") -> flagged
+        // Line 2: "<!-- vale is a tool for writing -->" contains "vale" -> flagged
+        // Line 3: "<!-- valedictorian javascript -->" contains "javascript" -> flagged
+        // Line 4: "<!-- linting javascript tips -->" contains "javascript" -> flagged
+        // Line 5: "<!-- vale javascript -->" contains "vale" and "javascript" -> flagged for both
+        // Line 6: "<!-- lint your javascript code -->" contains "javascript" -> flagged
+        assert_eq!(
+            result.len(),
+            7,
+            "Should flag proper names in non-directive HTML comments: got {result:?}"
+        );
+        assert_eq!(result[0].line, 1); // "vale" in <!-- vale -->
+        assert_eq!(result[1].line, 2); // "vale" in <!-- vale is a tool -->
+        assert_eq!(result[2].line, 3); // "javascript" in <!-- valedictorian javascript -->
+        assert_eq!(result[3].line, 4); // "javascript" in <!-- linting javascript tips -->
+        assert_eq!(result[4].line, 5); // "vale" in <!-- vale javascript -->
+        assert_eq!(result[5].line, 5); // "javascript" in <!-- vale javascript -->
+        assert_eq!(result[6].line, 6); // "javascript" in <!-- lint your javascript code -->
+    }
+
+    #[test]
+    fn test_vale_style_directives_skipped() {
+        let config = MD044Config {
+            names: vec!["JavaScript".to_string(), "Vale".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        // These ARE valid Vale directives and should be skipped:
+        let content = "\
+<!-- vale style = MyStyle -->
+<!-- vale styles = Style1, Style2 -->
+<!-- vale MyRule.Name = YES -->
+<!-- vale MyRule.Name = NO -->
+Some javascript text.
+";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // Only line 5 (body text) should be flagged
+        assert_eq!(
+            result.len(),
+            1,
+            "Should only flag body lines, not Vale style/rule directives: got {result:?}"
+        );
+        assert_eq!(result[0].line, 5);
     }
 }
