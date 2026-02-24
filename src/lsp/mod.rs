@@ -10,6 +10,7 @@ mod completion;
 mod configuration;
 pub mod index_worker;
 mod linting;
+mod navigation;
 pub mod server;
 pub mod types;
 

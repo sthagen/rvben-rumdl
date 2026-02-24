@@ -488,7 +488,7 @@ fn make_relative_path(from_dir: &Path, to_file: &Path) -> PathBuf {
 }
 
 /// Resolve `..` and `.` components in a path without touching the filesystem.
-fn normalize_path(path: PathBuf) -> PathBuf {
+pub(super) fn normalize_path(path: PathBuf) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
@@ -509,7 +509,7 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 /// Convert a UTF-16 code unit offset to the corresponding byte offset in a UTF-8 string.
 ///
 /// Returns `None` if `utf16_offset` is beyond the end of the string.
-fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> Option<usize> {
+pub(super) fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> Option<usize> {
     let mut byte_pos = 0;
     let mut utf16_pos = 0;
     for ch in s.chars() {

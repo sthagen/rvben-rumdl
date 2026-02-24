@@ -138,7 +138,7 @@ impl RumdlLanguageServer {
     /// This method first checks if the document is in the cache (opened in editor).
     /// If not found, it attempts to read the file from disk and caches it for
     /// future requests.
-    async fn get_document_content(&self, uri: &Url) -> Option<String> {
+    pub(super) async fn get_document_content(&self, uri: &Url) -> Option<String> {
         // First check the cache
         {
             let docs = self.documents.read().await;
@@ -274,6 +274,8 @@ impl LanguageServer for RumdlLanguageServer {
                     all_commit_characters: None,
                     completion_item: None,
                 }),
+                definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -1077,6 +1079,24 @@ impl LanguageServer for RumdlLanguageServer {
             log::warn!("Document not found: {uri}");
             Ok(None)
         }
+    }
+
+    async fn goto_definition(&self, params: GotoDefinitionParams) -> JsonRpcResult<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        log::debug!("Go-to-definition at {uri} {}:{}", position.line, position.character);
+
+        Ok(self.handle_goto_definition(&uri, position).await)
+    }
+
+    async fn references(&self, params: ReferenceParams) -> JsonRpcResult<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        log::debug!("Find references at {uri} {}:{}", position.line, position.character);
+
+        Ok(self.handle_references(&uri, position).await)
     }
 
     async fn diagnostic(&self, params: DocumentDiagnosticParams) -> JsonRpcResult<DocumentDiagnosticReportResult> {
