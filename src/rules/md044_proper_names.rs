@@ -520,9 +520,8 @@ impl MD044ProperNames {
 
         // YAML list item: "  - item" or "  - key: value"
         let stripped = line.trim_start();
-        if stripped.starts_with("- ") {
+        if let Some(after_dash) = stripped.strip_prefix("- ") {
             let leading = line.len() - stripped.len();
-            let after_dash = &stripped[2..];
             // Check if the list item contains a mapping (e.g., "- key: value")
             if let Some(result) = Self::kv_value_offset(line, after_dash, leading + 2) {
                 return result;

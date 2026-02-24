@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.27] - 2026-02-24
+
+### Fixed
+
+- **MD013**: CRLF line endings are now preserved during semantic-line-breaks reflow,
+  fixing false positive warnings in the LSP when editors send Windows-style line
+  endings ([#459](https://github.com/rvben/rumdl/issues/459))
+- **MD041**: Fix mode now correctly passes the file path to LintContext, enabling
+  filename-derived title insertion (`InsertDerived`). Index and README files now
+  derive their title from the parent directory name instead of "Index" or "README"
+- **MD044**: YAML frontmatter values are now checked as prose while keys, delimiters,
+  comments, and flow constructs are skipped. TOML frontmatter keys are also correctly
+  skipped ([#448](https://github.com/rvben/rumdl/issues/448))
+- **MD044**: Angle-bracket autolinks (`<https://...>`) inside HTML comments are no
+  longer flagged for proper name violations. Uses CommonMark autolink pattern matching
+  for all valid URI schemes ([#457](https://github.com/rvben/rumdl/issues/457))
+- **MD076**: Blank lines required by MD031 (blanks-around-fences) and MD058
+  (blanks-around-tables) inside list items are now recognized as structural rather
+  than inter-item separators, preventing false positives in tight lists with code
+  blocks, tables, or HTML blocks
+  ([#455](https://github.com/rvben/rumdl/issues/455))
+
+### Changed
+
+- Removed unused `itertools` dependency
+
 ## [0.1.26] - 2026-02-23
 
 ### Added
