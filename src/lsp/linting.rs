@@ -395,8 +395,8 @@ impl RumdlLanguageServer {
                     }
                 }
 
-                // Add "Fix all" action if there are multiple fixable issues in range
-                if fixable_count > 1 {
+                // Add "Fix all" action if there are any fixable issues in range
+                if fixable_count > 0 {
                     // Only apply fixes from fixable rules during "Fix all"
                     // Unfixable rules provide warning-level fixes for individual Quick Fix actions
                     let fixable_warnings: Vec<_> = warnings

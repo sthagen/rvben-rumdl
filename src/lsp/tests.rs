@@ -108,6 +108,32 @@ async fn test_get_code_actions() {
 }
 
 #[tokio::test]
+async fn test_source_fix_all_with_single_fixable_issue() {
+    let server = create_test_server();
+
+    let uri = Url::parse("file:///test.md").unwrap();
+    // Content with exactly 1 fixable issue: missing final newline (MD047)
+    let text = "# Test";
+
+    let range = Range {
+        start: Position { line: 0, character: 0 },
+        end: Position { line: 0, character: 6 },
+    };
+
+    let actions = server.get_code_actions(&uri, text, range).await.unwrap();
+
+    let fix_all_actions: Vec<_> = actions
+        .iter()
+        .filter(|a| a.kind.as_ref().is_some_and(|k| k.as_str() == "source.fixAll.rumdl"))
+        .collect();
+
+    assert!(
+        !fix_all_actions.is_empty(),
+        "source.fixAll.rumdl should be available even with a single fixable issue"
+    );
+}
+
+#[tokio::test]
 async fn test_get_code_actions_outside_range() {
     let server = create_test_server();
 
