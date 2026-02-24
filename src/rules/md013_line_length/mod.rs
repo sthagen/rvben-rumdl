@@ -545,6 +545,7 @@ impl MD013LineLength {
         lines: &[&str],
         line_index: &LineIndex,
         start_idx: usize,
+        line_ending: &str,
     ) -> (Option<LintWarning>, usize) {
         let Some(start_bq) = ctx.lines.get(start_idx).and_then(|line| line.blockquote.as_deref()) else {
             return (None, start_idx + 1);
@@ -678,7 +679,7 @@ impl MD013LineLength {
             return (None, next_idx);
         }
 
-        let reflowed_text = reflowed_with_style.join("\n");
+        let reflowed_text = reflowed_with_style.join(line_ending);
 
         let start_range = line_index.whole_line_range(paragraph_start + 1);
         let end_range = if end_line == lines.len() - 1 && !ctx.content.ends_with('\n') {
@@ -689,7 +690,7 @@ impl MD013LineLength {
         let byte_range = start_range.start..end_range.end;
 
         let replacement = if end_line < lines.len() - 1 || ctx.content.ends_with('\n') {
-            format!("{reflowed_text}\n")
+            format!("{reflowed_text}{line_ending}")
         } else {
             reflowed_text
         };
@@ -760,13 +761,19 @@ impl MD013LineLength {
         let mut warnings = Vec::new();
         let line_index = LineIndex::new(ctx.content);
 
+        // Detect the content's line ending style to preserve it in replacements.
+        // The LSP receives content from editors which may use CRLF (Windows).
+        // Replacements must match the original line endings to avoid false positives.
+        let line_ending = crate::utils::line_ending::detect_line_ending(ctx.content);
+
         let mut i = 0;
         while i < lines.len() {
             let line_num = i + 1;
 
             // Handle blockquote paragraphs with style-preserving reflow.
             if line_num > 0 && line_num <= ctx.lines.len() && ctx.lines[line_num - 1].blockquote.is_some() {
-                let (warning, next_idx) = self.generate_blockquote_paragraph_fix(ctx, config, lines, &line_index, i);
+                let (warning, next_idx) =
+                    self.generate_blockquote_paragraph_fix(ctx, config, lines, &line_index, i, line_ending);
                 if let Some(warning) = warning {
                     warnings.push(warning);
                 }
@@ -922,11 +929,11 @@ impl MD013LineLength {
                 // Re-add the 4-space indent to each reflowed line
                 let reflowed_with_indent: Vec<String> =
                     reflowed.iter().map(|line| format!("{base_indent}{line}")).collect();
-                let reflowed_text = reflowed_with_indent.join("\n");
+                let reflowed_text = reflowed_with_indent.join(line_ending);
 
                 // Preserve trailing newline
                 let replacement = if end_line < lines.len() - 1 || ctx.content.ends_with('\n') {
-                    format!("{reflowed_text}\n")
+                    format!("{reflowed_text}{line_ending}")
                 } else {
                     reflowed_text
                 };
@@ -1878,11 +1885,11 @@ impl MD013LineLength {
                         }
                     }
 
-                    let reflowed_text = result.join("\n");
+                    let reflowed_text = result.join(line_ending);
 
                     // Preserve trailing newline
                     let replacement = if end_line < lines.len() - 1 || ctx.content.ends_with('\n') {
-                        format!("{reflowed_text}\n")
+                        format!("{reflowed_text}{line_ending}")
                     } else {
                         reflowed_text
                     };
@@ -2129,11 +2136,11 @@ impl MD013LineLength {
                     }
                 }
 
-                let reflowed_text = reflowed.join("\n");
+                let reflowed_text = reflowed.join(line_ending);
 
                 // Preserve trailing newline if the original paragraph had one
                 let replacement = if end_line < lines.len() - 1 || ctx.content.ends_with('\n') {
-                    format!("{reflowed_text}\n")
+                    format!("{reflowed_text}{line_ending}")
                 } else {
                     reflowed_text
                 };
