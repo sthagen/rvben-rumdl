@@ -138,9 +138,10 @@ async fn test_get_code_actions_outside_range() {
     let server = create_test_server();
 
     let uri = Url::parse("file:///test.md").unwrap();
-    let text = "# Test\n\nThis is a test  \nWith trailing spaces  ";
+    // Line 2 and 3 have hard tabs (MD010, fixable), range only covers line 0
+    let text = "# Test\n\n\tThis is a test\n\tWith tabs\n";
 
-    // Create a range that doesn't cover the violations
+    // Range that doesn't cover the violations (line 0 only)
     let range = Range {
         start: Position { line: 0, character: 0 },
         end: Position { line: 0, character: 6 },
@@ -148,8 +149,25 @@ async fn test_get_code_actions_outside_range() {
 
     let actions = server.get_code_actions(&uri, text, range).await.unwrap();
 
-    // Should have no code actions for this range
-    assert!(actions.is_empty());
+    // Per-warning actions should not appear for this range
+    let per_warning_actions: Vec<_> = actions
+        .iter()
+        .filter(|a| a.kind.as_ref().is_some_and(|k| k.as_str() != "source.fixAll.rumdl"))
+        .collect();
+    assert!(
+        per_warning_actions.is_empty(),
+        "No per-warning actions for out-of-range lines"
+    );
+
+    // source.fixAll.rumdl is document-wide, so it should still appear
+    let fix_all_actions: Vec<_> = actions
+        .iter()
+        .filter(|a| a.kind.as_ref().is_some_and(|k| k.as_str() == "source.fixAll.rumdl"))
+        .collect();
+    assert!(
+        !fix_all_actions.is_empty(),
+        "fixAll is document-wide and should appear regardless of requested range"
+    );
 }
 
 #[tokio::test]
@@ -3936,15 +3954,14 @@ async fn test_find_references_includes_same_file_fragment_links() {
 /// sends the cursor position as the range, but fixable_count only counts
 /// in-range warnings.
 #[tokio::test]
-async fn test_narrow_range_prevents_fix_all_action() {
+async fn test_fix_all_action_available_regardless_of_range() {
     let server = create_test_server();
 
     let uri = Url::parse("file:///test.md").unwrap();
-    // Line 0: "# Title"          -- no fixable issues here
-    // Line 1: ""                  -- blank line
-    // Line 2: "Some text  "      -- trailing spaces (MD009, fixable)
-    // Line 3: ""                  -- no final newline issue if we end with \n
-    let text = "# Title\n\nSome text  \n";
+    // Line 0: "# Title"       -- no fixable issues here
+    // Line 1: ""              -- blank line
+    // Line 2: "\tTabbed text" -- hard tab (MD010, fixable)
+    let text = "# Title\n\n\tTabbed text\n";
 
     // Narrow range: only line 0 (where Zed cursor might be)
     let narrow_range = Range {
@@ -3959,13 +3976,14 @@ async fn test_narrow_range_prevents_fix_all_action() {
         .filter(|a| a.kind.as_ref().is_some_and(|k| k.as_str() == "source.fixAll.rumdl"))
         .collect();
 
-    // BUG: fixAll is NOT created because no fixable warnings are on line 0
+    // source.fixAll.rumdl counts fixable warnings across the entire document,
+    // so it should appear even when the cursor is on a line without warnings
     assert!(
-        fix_all_actions.is_empty(),
-        "With narrow range on line 0, fixAll should NOT be created (current behavior)"
+        !fix_all_actions.is_empty(),
+        "fixAll should be created regardless of cursor position when document has fixable issues"
     );
 
-    // Full document range: fixAll SHOULD be created
+    // Full document range should also have fixAll
     let full_range = Range {
         start: Position { line: 0, character: 0 },
         end: Position { line: 3, character: 0 },
@@ -3980,24 +3998,22 @@ async fn test_narrow_range_prevents_fix_all_action() {
 
     assert!(
         !fix_all_actions.is_empty(),
-        "With full document range, fixAll should be created"
+        "fixAll should be created with full document range"
     );
 }
 
-/// Verifies that when fixAll IS created (full range), it fixes ALL document
-/// issues, not just those in the requested range. The fixable_warnings list
-/// at line 402-416 uses the unfiltered `warnings` vec.
+/// Verifies that fixAll fixes ALL document issues, not just those in the requested range.
 #[tokio::test]
 async fn test_fix_all_applies_all_document_fixes_regardless_of_range() {
     let server = create_test_server();
 
     let uri = Url::parse("file:///test.md").unwrap();
-    // Two fixable issues on different lines:
-    // Line 2: "First issue  "   -- trailing spaces (MD009)
-    // Line 4: "Second issue  "  -- trailing spaces (MD009)
-    let text = "# Title\n\nFirst issue  \n\nSecond issue  \n";
+    // Two fixable issues on different lines (hard tabs → MD010):
+    // Line 2: "\tFirst issue"
+    // Line 4: "\tSecond issue"
+    let text = "# Title\n\n\tFirst issue\n\n\tSecond issue\n";
 
-    // Range covering only lines 2-2 (first issue)
+    // Range covering only line 2 (first issue)
     let partial_range = Range {
         start: Position { line: 2, character: 0 },
         end: Position { line: 2, character: 13 },
@@ -4010,10 +4026,10 @@ async fn test_fix_all_applies_all_document_fixes_regardless_of_range() {
         .filter(|a| a.kind.as_ref().is_some_and(|k| k.as_str() == "source.fixAll.rumdl"))
         .collect();
 
-    // fixAll should be created because there's at least one fixable issue in range
+    // fixAll should be created because there are fixable issues in the document
     assert!(
         !fix_all_actions.is_empty(),
-        "fixAll should be created when at least one fixable issue is in range"
+        "fixAll should be created when the document has fixable issues"
     );
 
     // Verify the fixed content addresses BOTH issues, not just the in-range one
@@ -4024,13 +4040,8 @@ async fn test_fix_all_applies_all_document_fixes_regardless_of_range() {
     let fixed_text = &text_edits[0].new_text;
 
     assert!(
-        !fixed_text.contains("First issue  "),
-        "fixAll should fix first issue (in range)"
-    );
-    assert!(
-        !fixed_text.contains("Second issue  "),
-        "fixAll should also fix second issue (out of range) - \
-         fixable_warnings collects from ALL warnings, not just in-range"
+        !fixed_text.contains('\t'),
+        "fixAll should fix all tab issues in the document, not just those in range"
     );
 }
 

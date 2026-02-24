@@ -378,7 +378,6 @@ impl RumdlLanguageServer {
         match crate::lint(text, &filtered_rules, false, flavor, Some(&rumdl_config)) {
             Ok(warnings) => {
                 let mut actions = Vec::new();
-                let mut fixable_count = 0;
 
                 for warning in &warnings {
                     // Check if warning is within the requested range
@@ -388,14 +387,13 @@ impl RumdlLanguageServer {
                         let mut warning_actions =
                             warning_to_code_actions_with_md013_config(warning, uri, text, Some(&md013_config));
                         actions.append(&mut warning_actions);
-
-                        if warning.fix.is_some() {
-                            fixable_count += 1;
-                        }
                     }
                 }
 
-                // Add "Fix all" action if there are any fixable issues in range
+                // Count fixable warnings across the entire document for the fixAll gate.
+                // source.fixAll.rumdl applies to the whole file, not just the requested range.
+                let fixable_count = warnings.iter().filter(|w| w.fix.is_some()).count();
+
                 if fixable_count > 0 {
                     // Only apply fixes from fixable rules during "Fix all"
                     // Unfixable rules provide warning-level fixes for individual Quick Fix actions

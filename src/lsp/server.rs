@@ -333,8 +333,7 @@ impl LanguageServer for RumdlLanguageServer {
             log::info!("Triggered initial workspace indexing for cross-file analysis");
         }
 
-        // Register file watcher for markdown files to detect external changes
-        // Watch all supported markdown extensions
+        // Register file watchers for markdown files and config files
         let markdown_patterns = [
             "**/*.md",
             "**/*.markdown",
@@ -346,8 +345,15 @@ impl LanguageServer for RumdlLanguageServer {
             "**/*.qmd",
             "**/*.rmd",
         ];
+        let config_patterns = [
+            "**/.rumdl.toml",
+            "**/rumdl.toml",
+            "**/pyproject.toml",
+            "**/.markdownlint.json",
+        ];
         let watchers: Vec<_> = markdown_patterns
             .iter()
+            .chain(config_patterns.iter())
             .map(|pattern| FileSystemWatcher {
                 glob_pattern: GlobPattern::String((*pattern).to_string()),
                 kind: Some(WatchKind::all()),
@@ -841,15 +847,11 @@ impl LanguageServer for RumdlLanguageServer {
                 {
                     log::info!("Config file changed: {}, invalidating config cache", path.display());
 
-                    // Invalidate all cache entries that were loaded from this config file
+                    // Clear the entire config cache when any config file changes.
+                    // Fallback entries (no config_file) become stale when a new config file
+                    // is created, and directory-scoped entries may resolve differently after edits.
                     let mut cache = self.config_cache.write().await;
-                    cache.retain(|_, entry| {
-                        if let Some(config_file) = &entry.config_file {
-                            config_file != &path
-                        } else {
-                            true
-                        }
-                    });
+                    cache.clear();
 
                     // Also reload the global fallback configuration
                     drop(cache);
