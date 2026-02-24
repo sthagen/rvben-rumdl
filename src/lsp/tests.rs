@@ -3181,3 +3181,82 @@ style = "fixed"
         "Formatted text should NOT have 2-space indent, got:\n{formatted_text}",
     );
 }
+
+/// Test that the source.fixAll.rumdl code action path (used by Zed's code_actions_on_format)
+/// correctly applies MD007 indent=4 config. This is the other path editors can use
+/// besides textDocument/formatting.
+#[tokio::test]
+async fn test_lsp_md007_code_action_fix_all_respects_indent_config() {
+    use tempfile::tempdir;
+
+    let server = create_test_server();
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let config_path = temp_dir.path().join(".rumdl.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[ul-indent]
+indent = 4
+style = "fixed"
+"#,
+    )
+    .expect("Failed to write .rumdl.toml");
+
+    // User's exact test data from issue #210
+    let content = "- Bullet item\n  - Nested bullet\n  1. Ordered child\n     - Bullet under ordered\n";
+
+    let test_md_path = temp_dir.path().join("test.md");
+    std::fs::write(&test_md_path, content).expect("Failed to write test.md");
+
+    let canonical_temp = temp_dir
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| temp_dir.path().to_path_buf());
+    server.workspace_roots.write().await.push(canonical_temp.clone());
+
+    let canonical_test_path = test_md_path.canonicalize().unwrap_or_else(|_| test_md_path.clone());
+    let uri = Url::from_file_path(&canonical_test_path).unwrap();
+    let entry = DocumentEntry {
+        content: content.to_string(),
+        version: Some(1),
+        from_disk: false,
+    };
+    server.documents.write().await.insert(uri.clone(), entry);
+
+    // Request code actions for the full document (simulates code_actions_on_format)
+    let range = Range {
+        start: Position { line: 0, character: 0 },
+        end: Position { line: 3, character: 26 },
+    };
+
+    let actions = server.get_code_actions(&uri, content, range).await.unwrap();
+
+    // Find the source.fixAll.rumdl action
+    let fix_all_actions: Vec<_> = actions
+        .iter()
+        .filter(|a| a.kind.as_ref().is_some_and(|k| k.as_str() == "source.fixAll.rumdl"))
+        .collect();
+
+    assert!(
+        !fix_all_actions.is_empty(),
+        "source.fixAll.rumdl action should be created"
+    );
+
+    // Extract the fixed content from the action's workspace edit
+    let fix_all = &fix_all_actions[0];
+    let edit = fix_all.edit.as_ref().expect("fixAll action should have an edit");
+    let changes = edit.changes.as_ref().expect("edit should have changes");
+    let text_edits = changes.get(&uri).expect("changes should include our file");
+    let fixed_text = &text_edits[0].new_text;
+
+    // Verify 4-space indent for nested bullet (depth 1)
+    assert!(
+        fixed_text.contains("\n    - Nested bullet"),
+        "source.fixAll should produce 4-space indent, got:\n{fixed_text}",
+    );
+    assert!(
+        !fixed_text.contains("\n  - Nested"),
+        "source.fixAll should NOT have 2-space indent, got:\n{fixed_text}",
+    );
+}
