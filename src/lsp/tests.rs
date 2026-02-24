@@ -3030,3 +3030,135 @@ reflow-mode = "semantic-line-breaks"
             .collect::<Vec<_>>()
     );
 }
+
+/// Test that MD007 indent=4 config is respected through the full LSP formatting path.
+/// Verifies that [ul-indent] alias, indent=4, and style="fixed" all propagate correctly
+/// from config file through resolve_config_for_file to the formatted output.
+#[tokio::test]
+async fn test_lsp_md007_formatting_respects_indent_config() {
+    use tempfile::tempdir;
+
+    let server = create_test_server();
+
+    // Create a temp directory with .rumdl.toml using [ul-indent] alias
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let config_path = temp_dir.path().join(".rumdl.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[ul-indent]
+indent = 4
+style = "fixed"
+"#,
+    )
+    .expect("Failed to write .rumdl.toml");
+
+    // Create test markdown with 2-space indentation (should be fixed to 4-space)
+    let test_md_path = temp_dir.path().join("test.md");
+    let content = "# Test\n\n- Bullet item\n  - Nested bullet\n";
+    std::fs::write(&test_md_path, content).expect("Failed to write test.md");
+
+    // Set up workspace root
+    let canonical_temp = temp_dir
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| temp_dir.path().to_path_buf());
+    server.workspace_roots.write().await.push(canonical_temp.clone());
+
+    // Step 1: Verify config is loaded correctly
+    let canonical_test_path = test_md_path.canonicalize().unwrap_or_else(|_| test_md_path.clone());
+    let resolved_config = server.resolve_config_for_file(&canonical_test_path).await;
+
+    let md007_config = resolved_config.rules.get("MD007");
+    assert!(
+        md007_config.is_some(),
+        "MD007 config should be present. Rules: {:?}",
+        resolved_config.rules.keys().collect::<Vec<_>>()
+    );
+
+    let md007_values = &md007_config.unwrap().values;
+    let indent_value = md007_values.get("indent").map(|v| v.as_integer().unwrap_or(0));
+    assert_eq!(
+        indent_value,
+        Some(4),
+        "MD007 indent should be 4, got: {:?}",
+        md007_values
+    );
+
+    // Step 2: Verify detection works (should find 2-space indent as violation)
+    let all_rules = crate::rules::all_rules(&resolved_config);
+    let filtered_rules = crate::rules::filter_rules(&all_rules, &resolved_config.global);
+    let warnings = crate::lint(
+        content,
+        &filtered_rules,
+        false,
+        crate::config::MarkdownFlavor::Standard,
+        Some(&resolved_config),
+    )
+    .expect("Lint should succeed");
+
+    let md007_warnings: Vec<_> = warnings
+        .iter()
+        .filter(|w| w.rule_name.as_deref() == Some("MD007"))
+        .collect();
+    assert_eq!(
+        md007_warnings.len(),
+        1,
+        "Should find exactly 1 MD007 warning for 2-space indent, found: {:?}",
+        md007_warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+    );
+    assert!(
+        md007_warnings[0].message.contains("Expected 4 spaces"),
+        "Warning should mention 4 spaces, got: {}",
+        md007_warnings[0].message
+    );
+
+    // Step 3: Verify the fix produces 4-space indent (not 2-space!)
+    assert!(md007_warnings[0].fix.is_some(), "MD007 warning should have a fix");
+    let fix = md007_warnings[0].fix.as_ref().unwrap();
+    assert_eq!(
+        fix.replacement, "    ",
+        "Fix replacement should be 4 spaces, got: {:?}",
+        fix.replacement
+    );
+
+    // Step 4: Exercise the full LSP formatting path
+    let uri = Url::from_file_path(&canonical_test_path).unwrap();
+    let entry = DocumentEntry {
+        content: content.to_string(),
+        version: Some(1),
+        from_disk: false,
+    };
+    server.documents.write().await.insert(uri.clone(), entry);
+
+    let params = DocumentFormattingParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        options: FormattingOptions {
+            tab_size: 4,
+            insert_spaces: true,
+            properties: HashMap::new(),
+            trim_trailing_whitespace: Some(true),
+            insert_final_newline: Some(true),
+            trim_final_newlines: Some(true),
+        },
+        work_done_progress_params: WorkDoneProgressParams::default(),
+    };
+
+    let result = server.formatting(params).await.unwrap();
+    assert!(result.is_some(), "Formatting should return edits");
+
+    let edits = result.unwrap();
+    assert!(!edits.is_empty(), "Should have at least one edit");
+
+    let formatted_text = &edits[0].new_text;
+    assert!(
+        formatted_text.contains("    - Nested bullet"),
+        "Formatted text should have 4-space indent, got:\n{}",
+        formatted_text
+    );
+    assert!(
+        !formatted_text.contains("\n  - Nested"),
+        "Formatted text should NOT have 2-space indent, got:\n{}",
+        formatted_text
+    );
+}
