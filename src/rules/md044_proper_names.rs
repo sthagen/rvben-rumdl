@@ -332,6 +332,13 @@ impl MD044ProperNames {
                             continue;
                         }
 
+                        // Skip if inside an angle-bracket URL (e.g., <https://...>)
+                        // The link parser skips autolinks inside HTML comments,
+                        // so we detect them directly in the line text.
+                        if Self::is_in_angle_bracket_url(line, start_pos) {
+                            continue;
+                        }
+
                         // Find which proper name this matches
                         if let Some(proper_name) = self.get_proper_name_for(found_name) {
                             // Only flag if it's not already correct
@@ -412,6 +419,61 @@ impl MD044ProperNames {
     fn link_text_is_url(text: &str) -> bool {
         let lower = text.trim().to_ascii_lowercase();
         lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("www.")
+    }
+
+    /// Check if a position within a line falls inside an angle-bracket URL (`<scheme://...>`).
+    ///
+    /// The link parser skips autolinks inside HTML comments, so `ctx.links` won't
+    /// contain them. This function detects angle-bracket URLs directly in the line
+    /// text, covering both HTML comments and regular text as a safety net.
+    fn is_in_angle_bracket_url(line: &str, pos: usize) -> bool {
+        let bytes = line.as_bytes();
+        let len = bytes.len();
+        let mut i = 0;
+        while i < len {
+            if bytes[i] == b'<' {
+                let after_open = i + 1;
+                // Check for a valid URI scheme per CommonMark autolink spec:
+                // scheme = [a-zA-Z][a-zA-Z0-9+.-]{0,31}
+                // followed by ':'
+                if after_open < len && bytes[after_open].is_ascii_alphabetic() {
+                    let mut s = after_open + 1;
+                    let scheme_max = (after_open + 32).min(len);
+                    while s < scheme_max
+                        && (bytes[s].is_ascii_alphanumeric()
+                            || bytes[s] == b'+'
+                            || bytes[s] == b'-'
+                            || bytes[s] == b'.')
+                    {
+                        s += 1;
+                    }
+                    if s < len && bytes[s] == b':' {
+                        // Valid scheme found; scan for closing '>' with no spaces or '<'
+                        let mut j = s + 1;
+                        let mut found_close = false;
+                        while j < len {
+                            match bytes[j] {
+                                b'>' => {
+                                    found_close = true;
+                                    break;
+                                }
+                                b' ' | b'<' => break,
+                                _ => j += 1,
+                            }
+                        }
+                        if found_close && pos >= i && pos <= j {
+                            return true;
+                        }
+                        if found_close {
+                            i = j + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        false
     }
 
     // Check if a character is a word boundary (handles Unicode)
@@ -2026,5 +2088,227 @@ Visit [github documentation](https://github.com/docs) for details.
         // "test" as list-item key should remain lowercase;
         // "test" in value portion should become "Test"
         assert_eq!(fixed, "---\nitems:\n  - test: a Test value\n---\n\nTest here\n");
+    }
+
+    // --- Angle-bracket URL tests (issue #457) ---
+
+    #[test]
+    fn test_angle_bracket_url_in_html_comment_not_flagged() {
+        // Angle-bracket URLs inside HTML comments should be skipped
+        let config = MD044Config {
+            names: vec!["Test".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "---\ntitle: Level 1 heading\n---\n\n<https://www.example.test>\n\n<!-- This is a Test https://www.example.test -->\n<!-- This is a Test <https://www.example.test> -->\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // Line 7: "Test" in comment prose before bare URL -- already correct capitalization
+        // Line 7: "test" in bare URL (not in angle brackets) -- but "test" is in URL domain, not prose.
+        //   However, .example.test has "test" at a word boundary (after '.'), so it IS flagged.
+        // Line 8: "Test" in comment prose -- correct capitalization, not flagged
+        // Line 8: "test" in <https://www.example.test> -- inside angle-bracket URL, NOT flagged
+
+        // The key assertion: line 8's angle-bracket URL should NOT produce a warning
+        let line8_warnings: Vec<_> = result.iter().filter(|w| w.line == 8).collect();
+        assert!(
+            line8_warnings.is_empty(),
+            "Should not flag names inside angle-bracket URLs in HTML comments: {line8_warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_bare_url_in_html_comment_still_flagged() {
+        // Bare URLs (not in angle brackets) inside HTML comments should still be checked
+        let config = MD044Config {
+            names: vec!["Test".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "<!-- This is a test https://www.example.test -->\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // "test" appears as prose text before URL and also in the bare URL domain
+        // At minimum, the prose "test" should be flagged
+        assert!(
+            !result.is_empty(),
+            "Should flag 'test' in prose text of HTML comment with bare URL"
+        );
+    }
+
+    #[test]
+    fn test_angle_bracket_url_in_regular_markdown_not_flagged() {
+        // Angle-bracket URLs in regular markdown are already handled by the link parser,
+        // but the angle-bracket check provides a safety net
+        let rule = MD044ProperNames::new(vec!["Test".to_string()], true);
+
+        let content = "<https://www.example.test>\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert!(
+            result.is_empty(),
+            "Should not flag names inside angle-bracket URLs in regular markdown: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_multiple_angle_bracket_urls_in_one_comment() {
+        let config = MD044Config {
+            names: vec!["Test".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "<!-- See <https://test.example.com> and <https://www.example.test> for details -->\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // Both URLs are inside angle brackets, so "test" inside them should NOT be flagged
+        assert!(
+            result.is_empty(),
+            "Should not flag names inside multiple angle-bracket URLs: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_angle_bracket_non_url_still_flagged() {
+        // <Test> is NOT a URL (no scheme), so is_in_angle_bracket_url does NOT protect it.
+        // Whether it gets flagged depends on HTML tag detection, not on our URL check.
+        assert!(
+            !MD044ProperNames::is_in_angle_bracket_url("<test> which is not a URL.", 1),
+            "is_in_angle_bracket_url should return false for non-URL angle brackets"
+        );
+    }
+
+    #[test]
+    fn test_angle_bracket_mailto_url_not_flagged() {
+        let config = MD044Config {
+            names: vec!["Test".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "<!-- Contact <mailto:test@example.com> for help -->\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert!(
+            result.is_empty(),
+            "Should not flag names inside angle-bracket mailto URLs: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_angle_bracket_ftp_url_not_flagged() {
+        let config = MD044Config {
+            names: vec!["Test".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "<!-- Download from <ftp://test.example.com/file> -->\n";
+        let ctx = create_context(content);
+        let result = rule.check(&ctx).unwrap();
+
+        assert!(
+            result.is_empty(),
+            "Should not flag names inside angle-bracket FTP URLs: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_angle_bracket_url_fix_preserves_url() {
+        // Fix should not modify text inside angle-bracket URLs
+        let config = MD044Config {
+            names: vec!["Test".to_string()],
+            ..MD044Config::default()
+        };
+        let rule = MD044ProperNames::from_config_struct(config);
+
+        let content = "<!-- test text <https://www.example.test> -->\n";
+        let ctx = create_context(content);
+        let fixed = rule.fix(&ctx).unwrap();
+
+        // "test" in prose should be fixed, URL should be preserved
+        assert!(
+            fixed.contains("<https://www.example.test>"),
+            "Fix should preserve angle-bracket URLs: {fixed}"
+        );
+        assert!(
+            fixed.contains("Test text"),
+            "Fix should correct prose 'test' to 'Test': {fixed}"
+        );
+    }
+
+    #[test]
+    fn test_is_in_angle_bracket_url_helper() {
+        // Direct tests of the helper function
+        let line = "text <https://example.test> more text";
+
+        // Inside the URL
+        assert!(MD044ProperNames::is_in_angle_bracket_url(line, 5)); // '<'
+        assert!(MD044ProperNames::is_in_angle_bracket_url(line, 6)); // 'h'
+        assert!(MD044ProperNames::is_in_angle_bracket_url(line, 15)); // middle of URL
+        assert!(MD044ProperNames::is_in_angle_bracket_url(line, 26)); // '>'
+
+        // Outside the URL
+        assert!(!MD044ProperNames::is_in_angle_bracket_url(line, 0)); // 't' at start
+        assert!(!MD044ProperNames::is_in_angle_bracket_url(line, 4)); // space before '<'
+        assert!(!MD044ProperNames::is_in_angle_bracket_url(line, 27)); // space after '>'
+
+        // Non-URL angle brackets
+        assert!(!MD044ProperNames::is_in_angle_bracket_url("<notaurl>", 1));
+
+        // mailto scheme
+        assert!(MD044ProperNames::is_in_angle_bracket_url(
+            "<mailto:test@example.com>",
+            10
+        ));
+
+        // ftp scheme
+        assert!(MD044ProperNames::is_in_angle_bracket_url(
+            "<ftp://test.example.com>",
+            10
+        ));
+    }
+
+    #[test]
+    fn test_is_in_angle_bracket_url_uppercase_scheme() {
+        // RFC 3986: URI schemes are case-insensitive
+        assert!(MD044ProperNames::is_in_angle_bracket_url(
+            "<HTTPS://test.example.com>",
+            10
+        ));
+        assert!(MD044ProperNames::is_in_angle_bracket_url(
+            "<Http://test.example.com>",
+            10
+        ));
+    }
+
+    #[test]
+    fn test_is_in_angle_bracket_url_uncommon_schemes() {
+        // ssh scheme
+        assert!(MD044ProperNames::is_in_angle_bracket_url(
+            "<ssh://test@example.com>",
+            10
+        ));
+        // file scheme
+        assert!(MD044ProperNames::is_in_angle_bracket_url("<file:///test/path>", 10));
+        // data scheme (no authority, just colon)
+        assert!(MD044ProperNames::is_in_angle_bracket_url("<data:text/plain;test>", 10));
+    }
+
+    #[test]
+    fn test_is_in_angle_bracket_url_unclosed() {
+        // Unclosed angle bracket should NOT match
+        assert!(!MD044ProperNames::is_in_angle_bracket_url(
+            "<https://test.example.com",
+            10
+        ));
     }
 }
