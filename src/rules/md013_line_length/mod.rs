@@ -307,10 +307,22 @@ impl Rule for MD013LineLength {
 
             // Link reference definitions are always exempt, even in strict mode.
             // There's no way to shorten them without breaking the URL.
+            // Also check after stripping list markers, since list items may
+            // contain link ref defs as their content.
             {
                 let trimmed = line.trim();
                 if trimmed.starts_with('[') && trimmed.contains("]:") && LINK_REF_PATTERN.is_match(trimmed) {
                     continue;
+                }
+                if is_list_item(trimmed) {
+                    let (_, content) = extract_list_marker_and_content(trimmed);
+                    let content_trimmed = content.trim();
+                    if content_trimmed.starts_with('[')
+                        && content_trimmed.contains("]:")
+                        && LINK_REF_PATTERN.is_match(content_trimmed)
+                    {
+                        continue;
+                    }
                 }
             }
 
@@ -1570,7 +1582,6 @@ impl MD013LineLength {
                 // Check if we need to reflow this list item
                 // We check the combined content to see if it exceeds length limits
                 let combined_content = content_lines.join(" ").trim().to_string();
-                let full_line = format!("{marker}{combined_content}");
 
                 // Helper to check if we should reflow in normalize mode
                 let should_normalize = || {
@@ -1596,9 +1607,21 @@ impl MD013LineLength {
 
                     // If we have paragraphs, check if they span multiple lines or there are multiple blocks
                     if has_paragraphs {
-                        let paragraph_count = blocks.iter().filter(|b| matches!(b, Block::Paragraph(_))).count();
+                        // Count only paragraphs that contain at least one non-exempt line.
+                        // Paragraphs consisting entirely of link ref defs or standalone links
+                        // should not trigger normalization.
+                        let paragraph_count = blocks
+                            .iter()
+                            .filter(|b| {
+                                if let Block::Paragraph(para_lines) = b {
+                                    !para_lines.iter().all(|line| is_exempt_line(line))
+                                } else {
+                                    false
+                                }
+                            })
+                            .count();
                         if paragraph_count > 1 {
-                            // Multiple paragraph blocks should be normalized
+                            // Multiple non-exempt paragraph blocks should be normalized
                             return true;
                         }
 
@@ -1614,10 +1637,21 @@ impl MD013LineLength {
                 let needs_reflow = match config.reflow_mode {
                     ReflowMode::Normalize => {
                         // Only reflow if:
-                        // 1. The combined line would exceed the limit, OR
+                        // 1. Any non-exempt paragraph, when joined, exceeds the limit, OR
                         // 2. The list item should be normalized (has multi-line plain text)
-                        let combined_length = self.calculate_effective_length(&full_line);
-                        if combined_length > config.line_length.get() {
+                        let any_paragraph_exceeds = blocks.iter().any(|block| {
+                            if let Block::Paragraph(para_lines) = block {
+                                if para_lines.iter().all(|line| is_exempt_line(line)) {
+                                    return false;
+                                }
+                                let joined = para_lines.join(" ");
+                                let with_marker = format!("{}{}", " ".repeat(marker_len), joined.trim());
+                                self.calculate_effective_length(&with_marker) > config.line_length.get()
+                            } else {
+                                false
+                            }
+                        });
+                        if any_paragraph_exceeds {
                             true
                         } else {
                             should_normalize()
@@ -1687,63 +1721,79 @@ impl MD013LineLength {
                     for (block_idx, block) in blocks.iter().enumerate() {
                         match block {
                             Block::Paragraph(para_lines) => {
-                                // Split the paragraph into segments at hard break boundaries
-                                // Each segment can be reflowed independently
-                                let segments = split_into_segments(para_lines);
+                                // If every line in this paragraph is exempt (link ref defs,
+                                // standalone links), preserve the paragraph verbatim instead
+                                // of reflowing it. Reflowing would corrupt link ref defs.
+                                let all_exempt = para_lines.iter().all(|line| is_exempt_line(line));
 
-                                for (segment_idx, segment) in segments.iter().enumerate() {
-                                    // Check if this segment ends with a hard break and what type
-                                    let hard_break_type = segment.last().and_then(|line| {
-                                        let line = line.strip_suffix('\r').unwrap_or(line);
-                                        if line.ends_with('\\') {
-                                            Some("\\")
-                                        } else if line.ends_with("  ") {
-                                            Some("  ")
-                                        } else {
-                                            None
-                                        }
-                                    });
-
-                                    // Join and reflow the segment (removing the hard break marker for processing)
-                                    let segment_for_reflow: Vec<String> = segment
-                                        .iter()
-                                        .map(|line| {
-                                            // Strip hard break marker (2 spaces or backslash) for reflow processing
-                                            if line.ends_with('\\') {
-                                                line[..line.len() - 1].trim_end().to_string()
-                                            } else if line.ends_with("  ") {
-                                                line[..line.len() - 2].trim_end().to_string()
-                                            } else {
-                                                line.clone()
-                                            }
-                                        })
-                                        .collect();
-
-                                    let segment_text = segment_for_reflow.join(" ").trim().to_string();
-                                    if !segment_text.is_empty() {
-                                        let reflowed =
-                                            crate::utils::text_reflow::reflow_line(&segment_text, &reflow_options);
-
-                                        if is_first_block && segment_idx == 0 {
-                                            // First segment of first block starts with marker
-                                            result.push(format!("{marker}{}", reflowed[0]));
-                                            for line in reflowed.iter().skip(1) {
-                                                result.push(format!("{expected_indent}{line}"));
-                                            }
+                                if all_exempt {
+                                    for (idx, line) in para_lines.iter().enumerate() {
+                                        if is_first_block && idx == 0 {
+                                            result.push(format!("{marker}{line}"));
                                             is_first_block = false;
                                         } else {
-                                            // Subsequent segments
-                                            for line in reflowed {
-                                                result.push(format!("{expected_indent}{line}"));
-                                            }
+                                            result.push(format!("{expected_indent}{line}"));
                                         }
+                                    }
+                                } else {
+                                    // Split the paragraph into segments at hard break boundaries
+                                    // Each segment can be reflowed independently
+                                    let segments = split_into_segments(para_lines);
 
-                                        // If this segment had a hard break, add it back to the last line
-                                        // Preserve the original hard break format (backslash or two spaces)
-                                        if let Some(break_marker) = hard_break_type
-                                            && let Some(last_line) = result.last_mut()
-                                        {
-                                            last_line.push_str(break_marker);
+                                    for (segment_idx, segment) in segments.iter().enumerate() {
+                                        // Check if this segment ends with a hard break and what type
+                                        let hard_break_type = segment.last().and_then(|line| {
+                                            let line = line.strip_suffix('\r').unwrap_or(line);
+                                            if line.ends_with('\\') {
+                                                Some("\\")
+                                            } else if line.ends_with("  ") {
+                                                Some("  ")
+                                            } else {
+                                                None
+                                            }
+                                        });
+
+                                        // Join and reflow the segment (removing the hard break marker for processing)
+                                        let segment_for_reflow: Vec<String> = segment
+                                            .iter()
+                                            .map(|line| {
+                                                // Strip hard break marker (2 spaces or backslash) for reflow processing
+                                                if line.ends_with('\\') {
+                                                    line[..line.len() - 1].trim_end().to_string()
+                                                } else if line.ends_with("  ") {
+                                                    line[..line.len() - 2].trim_end().to_string()
+                                                } else {
+                                                    line.clone()
+                                                }
+                                            })
+                                            .collect();
+
+                                        let segment_text = segment_for_reflow.join(" ").trim().to_string();
+                                        if !segment_text.is_empty() {
+                                            let reflowed =
+                                                crate::utils::text_reflow::reflow_line(&segment_text, &reflow_options);
+
+                                            if is_first_block && segment_idx == 0 {
+                                                // First segment of first block starts with marker
+                                                result.push(format!("{marker}{}", reflowed[0]));
+                                                for line in reflowed.iter().skip(1) {
+                                                    result.push(format!("{expected_indent}{line}"));
+                                                }
+                                                is_first_block = false;
+                                            } else {
+                                                // Subsequent segments
+                                                for line in reflowed {
+                                                    result.push(format!("{expected_indent}{line}"));
+                                                }
+                                            }
+
+                                            // If this segment had a hard break, add it back to the last line
+                                            // Preserve the original hard break format (backslash or two spaces)
+                                            if let Some(break_marker) = hard_break_type
+                                                && let Some(last_line) = result.last_mut()
+                                            {
+                                                last_line.push_str(break_marker);
+                                            }
                                         }
                                     }
                                 }
@@ -1965,11 +2015,27 @@ impl MD013LineLength {
                                 format!("Paragraph should use semantic line breaks ({num_sentences} sentences)")
                             }
                             ReflowMode::Normalize => {
-                                let combined_length = self.calculate_effective_length(&full_line);
-                                if combined_length > config.line_length.get() {
+                                // Find the longest non-exempt paragraph when joined
+                                let max_para_length = blocks
+                                    .iter()
+                                    .filter_map(|block| {
+                                        if let Block::Paragraph(para_lines) = block {
+                                            if para_lines.iter().all(|line| is_exempt_line(line)) {
+                                                return None;
+                                            }
+                                            let joined = para_lines.join(" ");
+                                            let with_indent = format!("{}{}", " ".repeat(marker_len), joined.trim());
+                                            Some(self.calculate_effective_length(&with_indent))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .max()
+                                    .unwrap_or(0);
+                                if max_para_length > config.line_length.get() {
                                     format!(
                                         "Line length {} exceeds {} characters",
-                                        combined_length,
+                                        max_para_length,
                                         config.line_length.get()
                                     )
                                 } else {
