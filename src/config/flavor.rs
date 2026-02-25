@@ -133,6 +133,14 @@ impl MarkdownFlavor {
         matches!(self, Self::Kramdown)
     }
 
+    /// Check if this flavor requires strict (≥4-space) list continuation indent.
+    ///
+    /// Python-Markdown (used by MkDocs) requires 4-space indentation for ordered
+    /// list continuation content, regardless of marker width.
+    pub fn requires_strict_list_indent(self) -> bool {
+        matches!(self, Self::MkDocs)
+    }
+
     /// Get a human-readable name for this flavor
     pub fn name(self) -> &'static str {
         match self {

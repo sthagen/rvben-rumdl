@@ -1,0 +1,732 @@
+//!
+//! Rule MD077: List continuation content indentation
+//!
+//! See [docs/md077.md](../../docs/md077.md) for full documentation, configuration, and examples.
+
+use crate::lint_context::LintContext;
+use crate::rule::{Fix, LintError, LintResult, LintWarning, Rule, RuleCategory, Severity};
+
+/// Rule MD077: List continuation content indentation
+///
+/// After a blank line inside a list item, continuation content must be indented
+/// to the item's content column (W+N rule). Under the MkDocs flavor, a minimum
+/// of 4 spaces is enforced for ordered list items to satisfy Python-Markdown.
+#[derive(Clone, Default)]
+pub struct MD077ListContinuationIndent;
+
+impl MD077ListContinuationIndent {
+    /// Check if a trimmed line is a block-level construct (not list continuation).
+    fn is_block_level_construct(trimmed: &str) -> bool {
+        // Footnote definition: [^label]:
+        if trimmed.starts_with("[^") && trimmed.contains("]:") {
+            return true;
+        }
+        // Abbreviation definition: *[text]:
+        if trimmed.starts_with("*[") && trimmed.contains("]:") {
+            return true;
+        }
+        // Reference link definition: [label]: url
+        // Must start with [ but not be a regular link, footnote, or abbreviation
+        if trimmed.starts_with('[') && !trimmed.starts_with("[^") && trimmed.contains("]: ") {
+            return true;
+        }
+        false
+    }
+
+    /// Check if a trimmed line is a fenced code block delimiter (opener or closer).
+    fn is_code_fence(trimmed: &str) -> bool {
+        let bytes = trimmed.as_bytes();
+        if bytes.len() < 3 {
+            return false;
+        }
+        let ch = bytes[0];
+        (ch == b'`' || ch == b'~') && bytes[1] == ch && bytes[2] == ch
+    }
+
+    /// Check if a line should be skipped (inside code, HTML, frontmatter, etc.)
+    ///
+    /// Code block *content* is skipped, but fence opener/closer lines are not —
+    /// their indentation matters for list continuation in MkDocs.
+    fn should_skip_line(info: &crate::lint_context::LineInfo, trimmed: &str) -> bool {
+        if info.in_code_block && !Self::is_code_fence(trimmed) {
+            return true;
+        }
+        info.in_front_matter
+            || info.in_html_block
+            || info.in_html_comment
+            || info.in_mkdocstrings
+            || info.in_esm_block
+            || info.in_math_block
+            || info.in_admonition
+            || info.in_content_tab
+            || info.in_pymdown_block
+            || info.in_definition_list
+            || info.in_mkdocs_html_markdown
+            || info.in_kramdown_extension_block
+    }
+}
+
+impl Rule for MD077ListContinuationIndent {
+    fn name(&self) -> &'static str {
+        "MD077"
+    }
+
+    fn description(&self) -> &'static str {
+        "List continuation content indentation"
+    }
+
+    fn check(&self, ctx: &LintContext) -> LintResult {
+        if ctx.content.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let strict_indent = ctx.flavor.requires_strict_list_indent();
+        let total_lines = ctx.lines.len();
+        let mut warnings = Vec::new();
+        let mut flagged_lines = std::collections::HashSet::new();
+
+        // Collect all list item lines sorted, with their content_column and marker_column.
+        // We need this to compute owned ranges that extend past block.end_line
+        // (the parser excludes under-indented continuation from the block).
+        let mut items: Vec<(usize, usize, usize)> = Vec::new(); // (line_num, marker_col, content_col)
+        for block in &ctx.list_blocks {
+            for &item_line in &block.item_lines {
+                if let Some(info) = ctx.line_info(item_line)
+                    && let Some(ref li) = info.list_item
+                {
+                    items.push((item_line, li.marker_column, li.content_column));
+                }
+            }
+        }
+        items.sort_unstable();
+        items.dedup_by_key(|&mut (ln, _, _)| ln);
+
+        for (item_idx, &(item_line, marker_col, content_col)) in items.iter().enumerate() {
+            let required = if strict_indent { content_col.max(4) } else { content_col };
+
+            // Owned range ends at the line before the next sibling-or-higher
+            // item, or end of document.
+            let range_end = items
+                .iter()
+                .skip(item_idx + 1)
+                .find(|&&(_, mc, _)| mc <= marker_col)
+                .map(|&(ln, _, _)| ln - 1)
+                .unwrap_or(total_lines);
+
+            let mut saw_blank = false;
+
+            for line_num in (item_line + 1)..=range_end {
+                let Some(line_info) = ctx.line_info(line_num) else {
+                    continue;
+                };
+
+                let trimmed = line_info.content(ctx.content).trim_start();
+
+                if Self::should_skip_line(line_info, trimmed) {
+                    continue;
+                }
+
+                if line_info.is_blank {
+                    saw_blank = true;
+                    continue;
+                }
+
+                // Nested list items are not continuation content
+                if line_info.list_item.is_some() {
+                    saw_blank = false;
+                    continue;
+                }
+
+                // Skip headings - they clearly aren't list continuation
+                if line_info.heading.is_some() {
+                    break;
+                }
+
+                // Skip horizontal rules
+                if line_info.is_horizontal_rule {
+                    break;
+                }
+
+                // Skip block-level constructs that aren't list continuation:
+                // reference definitions, footnote definitions, abbreviation definitions
+                if Self::is_block_level_construct(trimmed) {
+                    continue;
+                }
+
+                // Only flag content after a blank line (loose continuation)
+                if !saw_blank {
+                    continue;
+                }
+
+                let actual = line_info.visual_indent;
+
+                // Content at or below the marker column is not continuation —
+                // it starts a new paragraph (top-level) or belongs to a
+                // parent item (nested).
+                if actual <= marker_col {
+                    break;
+                }
+
+                if actual < required && flagged_lines.insert(line_num) {
+                    let line_content = line_info.content(ctx.content);
+
+                    let message = if strict_indent {
+                        format!(
+                            "Content inside list item needs {} spaces of indentation \
+                             for MkDocs compatibility (found {})",
+                            required, actual,
+                        )
+                    } else {
+                        format!(
+                            "Content after blank line in list item needs {} spaces of \
+                             indentation to remain part of the list (found {})",
+                            required, actual,
+                        )
+                    };
+
+                    // Build fix: replace leading whitespace with correct indent
+                    let fix_start = line_info.byte_offset;
+                    let fix_end = fix_start + line_info.indent;
+
+                    warnings.push(LintWarning {
+                        rule_name: Some("MD077".to_string()),
+                        line: line_num,
+                        column: 1,
+                        end_line: line_num,
+                        end_column: line_content.len() + 1,
+                        message,
+                        severity: Severity::Warning,
+                        fix: Some(Fix {
+                            range: fix_start..fix_end,
+                            replacement: " ".repeat(required),
+                        }),
+                    });
+                }
+
+                // Reset saw_blank after processing non-blank content.
+                // Exception: code fence lines (opener/closer) are structural
+                // delimiters — the closer inherits the blank-line status from
+                // the opener so both get checked.
+                if !line_info.in_code_block {
+                    saw_blank = false;
+                }
+            }
+        }
+
+        Ok(warnings)
+    }
+
+    fn fix(&self, ctx: &LintContext) -> Result<String, LintError> {
+        let warnings = self.check(ctx)?;
+        if warnings.is_empty() {
+            return Ok(ctx.content.to_string());
+        }
+
+        // Sort fixes by byte position descending to apply from end to start
+        let mut fixes: Vec<Fix> = warnings.into_iter().filter_map(|w| w.fix).collect();
+        fixes.sort_by_key(|f| std::cmp::Reverse(f.range.start));
+
+        let mut content = ctx.content.to_string();
+        for fix in fixes {
+            if fix.range.start <= content.len() && fix.range.end <= content.len() {
+                content.replace_range(fix.range, &fix.replacement);
+            }
+        }
+
+        Ok(content)
+    }
+
+    fn category(&self) -> RuleCategory {
+        RuleCategory::List
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn from_config(_config: &crate::config::Config) -> Box<dyn Rule>
+    where
+        Self: Sized,
+    {
+        Box::new(Self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::MarkdownFlavor;
+
+    fn check(content: &str) -> Vec<LintWarning> {
+        let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let rule = MD077ListContinuationIndent;
+        rule.check(&ctx).unwrap()
+    }
+
+    fn check_mkdocs(content: &str) -> Vec<LintWarning> {
+        let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+        let rule = MD077ListContinuationIndent;
+        rule.check(&ctx).unwrap()
+    }
+
+    fn fix(content: &str) -> String {
+        let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let rule = MD077ListContinuationIndent;
+        rule.fix(&ctx).unwrap()
+    }
+
+    fn fix_mkdocs(content: &str) -> String {
+        let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+        let rule = MD077ListContinuationIndent;
+        rule.fix(&ctx).unwrap()
+    }
+
+    // ── Basic: no blank line (lazy continuation) → no warning ─────────
+
+    #[test]
+    fn lazy_continuation_not_flagged() {
+        // Without a blank line, this is lazy continuation - not our concern
+        let content = "- Item\ncontinuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Unordered list: correct indent after blank ────────────────────
+
+    #[test]
+    fn unordered_correct_indent_no_warning() {
+        let content = "- Item\n\n  continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn unordered_partial_indent_warns() {
+        // Content with some indent (above marker column) but less than
+        // content_column is likely an indentation mistake.
+        let content = "- Item\n\n continuation\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].line, 3);
+        assert!(warnings[0].message.contains("2 spaces"));
+        assert!(warnings[0].message.contains("found 1"));
+    }
+
+    #[test]
+    fn unordered_zero_indent_is_new_paragraph() {
+        // Content at 0 indent after a top-level list is a new paragraph, not
+        // under-indented continuation.
+        let content = "- Item\n\ncontinuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Ordered list: CommonMark W+N ──────────────────────────────────
+
+    #[test]
+    fn ordered_3space_correct_commonmark() {
+        // "1. " is 3 chars, content_column = 3
+        let content = "1. Item\n\n   continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn ordered_2space_under_indent_commonmark() {
+        let content = "1. Item\n\n  continuation\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("3 spaces"));
+        assert!(warnings[0].message.contains("found 2"));
+    }
+
+    // ── Multi-digit ordered markers ───────────────────────────────────
+
+    #[test]
+    fn multi_digit_marker_correct() {
+        // "10. " is 4 chars, content_column = 4
+        let content = "10. Item\n\n    continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn multi_digit_marker_under_indent() {
+        let content = "10. Item\n\n   continuation\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("4 spaces"));
+    }
+
+    // ── MkDocs flavor: 4-space minimum ────────────────────────────────
+
+    #[test]
+    fn mkdocs_3space_ordered_warns() {
+        // In MkDocs mode, 3-space indent on "1. " is not enough
+        let content = "1. Item\n\n   continuation\n";
+        let warnings = check_mkdocs(content);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("4 spaces"));
+        assert!(warnings[0].message.contains("MkDocs"));
+    }
+
+    #[test]
+    fn mkdocs_4space_ordered_no_warning() {
+        let content = "1. Item\n\n    continuation\n";
+        assert!(check_mkdocs(content).is_empty());
+    }
+
+    #[test]
+    fn mkdocs_unordered_2space_ok() {
+        // Unordered "- " has content_column = 2; max(2, 4) = 4 in mkdocs
+        let content = "- Item\n\n    continuation\n";
+        assert!(check_mkdocs(content).is_empty());
+    }
+
+    #[test]
+    fn mkdocs_unordered_2space_warns() {
+        // "- " has content_column 2; MkDocs requires max(2,4) = 4
+        let content = "- Item\n\n  continuation\n";
+        let warnings = check_mkdocs(content);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("4 spaces"));
+    }
+
+    // ── Auto-fix ──────────────────────────────────────────────────────
+
+    #[test]
+    fn fix_unordered_indent() {
+        // Partial indent (above marker column, below content column) gets fixed
+        let content = "- Item\n\n continuation\n";
+        let fixed = fix(content);
+        assert_eq!(fixed, "- Item\n\n  continuation\n");
+    }
+
+    #[test]
+    fn fix_ordered_indent() {
+        let content = "1. Item\n\n continuation\n";
+        let fixed = fix(content);
+        assert_eq!(fixed, "1. Item\n\n   continuation\n");
+    }
+
+    #[test]
+    fn fix_mkdocs_indent() {
+        let content = "1. Item\n\n   continuation\n";
+        let fixed = fix_mkdocs(content);
+        assert_eq!(fixed, "1. Item\n\n    continuation\n");
+    }
+
+    // ── Nested lists: only flag continuation, not sub-items ───────────
+
+    #[test]
+    fn nested_list_items_not_flagged() {
+        let content = "- Parent\n\n  - Child\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn nested_list_zero_indent_is_new_paragraph() {
+        // Content at 0 indent ends the list, not continuation
+        let content = "- Parent\n  - Child\n\ncontinuation of parent\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn nested_list_partial_indent_flagged() {
+        // Content with partial indent (above parent marker, below content col)
+        let content = "- Parent\n  - Child\n\n continuation of parent\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("2 spaces"));
+    }
+
+    // ── Code blocks inside items ─────────────────────────────────────
+
+    #[test]
+    fn code_block_correctly_indented_no_warning() {
+        // Fence lines and content all at correct indent for "- " (content_column = 2)
+        let content = "- Item\n\n  ```\n  code\n  ```\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn code_fence_under_indented_warns() {
+        // Fence opener has 1-space indent, but "- " needs 2
+        let content = "- Item\n\n ```\n code\n ```\n";
+        let warnings = check(content);
+        // Fence opener and closer are flagged; content lines are skipped
+        assert_eq!(warnings.len(), 2);
+    }
+
+    #[test]
+    fn code_fence_under_indented_ordered_mkdocs() {
+        // Ordered list in MkDocs: "1. " needs max(3, 4) = 4 spaces
+        // Fence at 3 spaces is correct for CommonMark but wrong for MkDocs
+        let content = "1. Item\n\n   ```toml\n   key = \"value\"\n   ```\n";
+        assert!(check(content).is_empty()); // Standard mode: 3 is fine
+        let warnings = check_mkdocs(content);
+        assert_eq!(warnings.len(), 2); // MkDocs: fence opener + closer both need 4
+        assert!(warnings[0].message.contains("4 spaces"));
+        assert!(warnings[0].message.contains("MkDocs"));
+    }
+
+    #[test]
+    fn code_fence_tilde_under_indented() {
+        let content = "- Item\n\n ~~~\n code\n ~~~\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 2); // Tilde fences also checked
+    }
+
+    // ── Multiple blank lines ──────────────────────────────────────────
+
+    #[test]
+    fn multiple_blank_lines_zero_indent_is_new_paragraph() {
+        // Even with multiple blanks, 0-indent content is a new paragraph
+        let content = "- Item\n\n\ncontinuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn multiple_blank_lines_partial_indent_flags() {
+        let content = "- Item\n\n\n continuation\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+    }
+
+    // ── Empty items: no continuation to check ─────────────────────────
+
+    #[test]
+    fn empty_item_no_warning() {
+        let content = "- \n- Second\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Multiple items, only some under-indented ──────────────────────
+
+    #[test]
+    fn multiple_items_mixed_indent() {
+        let content = "1. First\n\n   correct continuation\n\n2. Second\n\n  wrong continuation\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].line, 7);
+    }
+
+    // ── Task list items ───────────────────────────────────────────────
+
+    #[test]
+    fn task_list_correct_indent() {
+        // "- [ ] " = content_column is typically at col 6
+        let content = "- [ ] Task\n\n      continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Frontmatter skipped ───────────────────────────────────────────
+
+    #[test]
+    fn frontmatter_not_flagged() {
+        let content = "---\ntitle: test\n---\n\n- Item\n\n  continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Fix produces valid output with multiple fixes ─────────────────
+
+    #[test]
+    fn fix_multiple_items() {
+        let content = "1. First\n\n wrong1\n\n2. Second\n\n wrong2\n";
+        let fixed = fix(content);
+        assert_eq!(fixed, "1. First\n\n   wrong1\n\n2. Second\n\n   wrong2\n");
+    }
+
+    // ── No false positive when content is after sibling item ──────────
+
+    #[test]
+    fn sibling_item_boundary_respected() {
+        // The "continuation" after a blank belongs to "- Second", not "- First"
+        let content = "- First\n- Second\n\n  continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Blockquote-nested lists ────────────────────────────────────────
+
+    #[test]
+    fn blockquote_list_correct_indent_no_warning() {
+        // Lists inside blockquotes: visual_indent includes the blockquote
+        // prefix, so comparisons work on raw line columns.
+        let content = "> - Item\n>\n>   continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn blockquote_list_under_indent_no_false_positive() {
+        // Under-indented continuation inside a blockquote: visual_indent
+        // starts at 0 (the `>` char) which is <= marker_col, so the scan
+        // breaks and no warning is emitted. This is a known false negative
+        // (not a false positive), which is the safer default.
+        let content = "> - Item\n>\n> continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Deep nesting (3+ levels) ──────────────────────────────────────
+
+    #[test]
+    fn deeply_nested_correct_indent() {
+        let content = "- L1\n  - L2\n    - L3\n\n      continuation of L3\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn deeply_nested_under_indent() {
+        // L3 starts at column 4 with "- " marker, content_column = 6
+        // Continuation with 5 spaces is under-indented for L3.
+        let content = "- L1\n  - L2\n    - L3\n\n     continuation of L3\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("6 spaces"));
+        assert!(warnings[0].message.contains("found 5"));
+    }
+
+    // ── Tab indentation ───────────────────────────────────────────────
+
+    #[test]
+    fn tab_indent_correct() {
+        // A tab at the start expands to 4 visual columns, which satisfies
+        // "- " (content_column = 2).
+        let content = "- Item\n\n\tcontinuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Multiple continuation paragraphs ──────────────────────────────
+
+    #[test]
+    fn multiple_continuations_correct() {
+        let content = "- Item\n\n  para 1\n\n  para 2\n\n  para 3\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn multiple_continuations_second_under_indent() {
+        // First continuation is correct, second is under-indented
+        let content = "- Item\n\n  para 1\n\n continuation 2\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].line, 5);
+    }
+
+    // ── Ordered list with `)` marker style ────────────────────────────
+
+    #[test]
+    fn ordered_paren_marker_correct() {
+        // "1) " is 3 chars, content_column = 3
+        let content = "1) Item\n\n   continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn ordered_paren_marker_under_indent() {
+        let content = "1) Item\n\n  continuation\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("3 spaces"));
+    }
+
+    // ── Star and plus markers ─────────────────────────────────────────
+
+    #[test]
+    fn star_marker_correct() {
+        let content = "* Item\n\n  continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    #[test]
+    fn star_marker_under_indent() {
+        let content = "* Item\n\n continuation\n";
+        let warnings = check(content);
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn plus_marker_correct() {
+        let content = "+ Item\n\n  continuation\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Heading breaks scan ───────────────────────────────────────────
+
+    #[test]
+    fn heading_after_list_no_warning() {
+        let content = "- Item\n\n# Heading\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Horizontal rule breaks scan ───────────────────────────────────
+
+    #[test]
+    fn hr_after_list_no_warning() {
+        let content = "- Item\n\n---\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Reference link definitions skip ───────────────────────────────
+
+    #[test]
+    fn reference_link_def_not_flagged() {
+        let content = "- Item\n\n [link]: https://example.com\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Footnote definitions skip ─────────────────────────────────────
+
+    #[test]
+    fn footnote_def_not_flagged() {
+        let content = "- Item\n\n [^1]: footnote text\n";
+        assert!(check(content).is_empty());
+    }
+
+    // ── Fix preserves correct content ─────────────────────────────────
+
+    #[test]
+    fn fix_deeply_nested() {
+        let content = "- L1\n  - L2\n    - L3\n\n     under-indented\n";
+        let fixed = fix(content);
+        assert_eq!(fixed, "- L1\n  - L2\n    - L3\n\n      under-indented\n");
+    }
+
+    #[test]
+    fn fix_mkdocs_unordered() {
+        // MkDocs: "- " has content_column 2, but MkDocs requires max(2,4) = 4
+        let content = "- Item\n\n  continuation\n";
+        let fixed = fix_mkdocs(content);
+        assert_eq!(fixed, "- Item\n\n    continuation\n");
+    }
+
+    #[test]
+    fn fix_code_fence_indent() {
+        // Fence opener and closer get re-indented; content inside is untouched
+        let content = "- Item\n\n ```\n code\n ```\n";
+        let fixed = fix(content);
+        assert_eq!(fixed, "- Item\n\n  ```\n code\n  ```\n");
+    }
+
+    #[test]
+    fn fix_mkdocs_code_fence_indent() {
+        // MkDocs ordered list: fence at 3 spaces needs 4
+        let content = "1. Item\n\n   ```toml\n   key = \"val\"\n   ```\n";
+        let fixed = fix_mkdocs(content);
+        assert_eq!(fixed, "1. Item\n\n    ```toml\n   key = \"val\"\n    ```\n");
+    }
+
+    // ── Empty document / whitespace-only ──────────────────────────────
+
+    #[test]
+    fn empty_document_no_warning() {
+        assert!(check("").is_empty());
+    }
+
+    #[test]
+    fn whitespace_only_no_warning() {
+        assert!(check("   \n\n  \n").is_empty());
+    }
+
+    // ── No list at all ────────────────────────────────────────────────
+
+    #[test]
+    fn no_list_no_warning() {
+        let content = "# Heading\n\nSome paragraph.\n\nAnother paragraph.\n";
+        assert!(check(content).is_empty());
+    }
+}

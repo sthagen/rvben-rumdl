@@ -4,7 +4,7 @@
 
 ## Introduction
 
-rumdl implements 70 rules for checking Markdown files. This document provides a comprehensive reference of all available rules, organized by category.
+rumdl implements 71 rules for checking Markdown files. This document provides a comprehensive reference of all available rules, organized by category.
 Each rule has a brief description and a link to its detailed documentation.
 
 For information on global configuration settings (file selection, rule enablement, etc.), see the [Global Settings Reference](global-settings.md).
@@ -176,6 +176,7 @@ Severity affects:
 | [MD032](md032.md) | Blanks around lists       | Lists should be surrounded by blank lines                 |
 | [MD069](md069.md) | No duplicate list markers | Duplicate markers like `- - text` from copy-paste         |
 | [MD076](md076.md) | List item spacing         | List item spacing should be consistent                    |
+| [MD077](md077.md) | List continuation indent  | List continuation content indentation                     |
 
 ## Whitespace Rules
 

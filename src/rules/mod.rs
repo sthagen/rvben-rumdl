@@ -70,6 +70,7 @@ mod md073_toc_validation;
 mod md074_mkdocs_nav;
 mod md075_orphaned_table_rows;
 mod md076_list_item_spacing;
+mod md077_list_continuation_indent;
 
 pub use md001_heading_increment::MD001HeadingIncrement;
 pub use md003_heading_style::MD003HeadingStyle;
@@ -137,6 +138,7 @@ pub use md073_toc_validation::MD073TocValidation;
 pub use md074_mkdocs_nav::MD074MkDocsNav;
 pub use md075_orphaned_table_rows::MD075OrphanedTableRows;
 pub use md076_list_item_spacing::{ListItemSpacingStyle, MD076ListItemSpacing};
+pub use md077_list_continuation_indent::MD077ListContinuationIndent;
 
 mod md012_no_multiple_blanks;
 pub use md012_no_multiple_blanks::MD012NoMultipleBlanks;
@@ -530,6 +532,11 @@ const RULES: &[RuleEntry] = &[
     RuleEntry {
         name: "MD076",
         ctor: MD076ListItemSpacing::from_config,
+        opt_in: false,
+    },
+    RuleEntry {
+        name: "MD077",
+        ctor: MD077ListContinuationIndent::from_config,
         opt_in: false,
     },
 ];

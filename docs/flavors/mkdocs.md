@@ -168,6 +168,7 @@ MkDocs extensions for special formatting:
 | MD051 | Validate all fragment links       | Skip footnote and option anchors        |
 | MD052 | Flag undefined references        | Allow auto-references and snippets      |
 | MD056 | Strict column count              | Handle MkDocs table extensions          |
+| MD077 | Content column W+N indent        | Enforce min 4-space continuation indent |
 
 ## Configuration
 
