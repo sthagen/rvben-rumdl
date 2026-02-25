@@ -338,21 +338,41 @@ impl RumdlLanguageServer {
         {
             let cache = self.config_cache.read().await;
             if let Some(entry) = cache.get(&search_dir) {
-                let source_owned: String; // ensure owned storage for logging
-                let source: &str = if entry.from_global_fallback {
-                    "global/user fallback"
-                } else if let Some(path) = &entry.config_file {
-                    source_owned = path.to_string_lossy().to_string();
-                    &source_owned
+                // If the cached entry is a global fallback, check whether a config file
+                // has since been created in the directory. If so, treat as a cache miss
+                // so we pick up the new config file.
+                if entry.from_global_fallback {
+                    const CONFIG_FILES: &[&str] =
+                        &[".rumdl.toml", "rumdl.toml", "pyproject.toml", ".markdownlint.json"];
+                    let config_now_exists = CONFIG_FILES.iter().any(|name| search_dir.join(name).exists());
+                    if config_now_exists {
+                        log::debug!(
+                            "Config cache fallback entry for {} is stale: config file now exists, re-resolving",
+                            search_dir.display()
+                        );
+                        // Drop the read lock and fall through to cache miss path
+                    } else {
+                        log::debug!(
+                            "Config cache hit for directory: {} (loaded from: global/user fallback)",
+                            search_dir.display(),
+                        );
+                        return entry.config.clone();
+                    }
                 } else {
-                    "<unknown>"
-                };
-                log::debug!(
-                    "Config cache hit for directory: {} (loaded from: {})",
-                    search_dir.display(),
-                    source
-                );
-                return entry.config.clone();
+                    let source_owned: String;
+                    let source: &str = if let Some(path) = &entry.config_file {
+                        source_owned = path.to_string_lossy().to_string();
+                        &source_owned
+                    } else {
+                        "<unknown>"
+                    };
+                    log::debug!(
+                        "Config cache hit for directory: {} (loaded from: {})",
+                        search_dir.display(),
+                        source
+                    );
+                    return entry.config.clone();
+                }
             }
         }
 

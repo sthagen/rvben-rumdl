@@ -4345,41 +4345,29 @@ indent = 4
     .unwrap();
 
     // Step 3: Resolve config again WITHOUT clearing cache
-    // This simulates what happens when the user edits config but the cache isn't invalidated
+    // The cache detects that a config file now exists and re-resolves instead of
+    // serving the stale global fallback entry.
     let config_after = server.resolve_config_for_file(&test_file).await;
     let indent_after = crate::config::get_rule_config_value::<usize>(&config_after, "MD007", "indent");
 
-    // BUG: This will get indent=2 (stale cache) instead of indent=4 (new config)
-    // The cache has a fallback entry with config_file: None, which is never invalidated
-    // by did_change_watched_files because it only removes entries matching a specific path.
-    //
-    // This assertion documents the bug: the cache serves stale config.
-    // When this test fails (after the bug is fixed), update the assertion to expect Some(4).
-    if indent_after == Some(4) {
-        // Cache was correctly invalidated - the bug is fixed
-        // This is the DESIRED behavior
-    } else {
-        // Cache served stale config - this is the BUG
-        // The resolve_config_for_file got a cache hit with the old fallback entry
-        assert!(
-            indent_after.is_none() || indent_after == Some(2),
-            "If stale cache is served, indent should still be default. Got: {indent_after:?}"
-        );
+    assert_eq!(
+        indent_after,
+        Some(4),
+        "After .rumdl.toml is created, resolve_config_for_file should pick up the new config. \
+         Expected MD007 indent=4, got {indent_after:?}"
+    );
 
-        // Verify the cache still has the stale entry
+    // Verify the cache was updated with the new config file entry
+    {
         let cache = server.config_cache.read().await;
-        let entry = cache.get(&project).expect("Cache entry should still exist");
+        let entry = cache.get(&project).expect("Cache entry should exist after re-resolve");
         assert!(
-            entry.from_global_fallback,
-            "Stale cache entry should still be marked as global fallback"
+            !entry.from_global_fallback,
+            "Cache entry should no longer be a global fallback after config file was discovered"
         );
-
-        panic!(
-            "BUG CONFIRMED: Config cache serves stale config after .rumdl.toml is created. \
-             Expected MD007 indent=4 from new config file, but got {:?} from cached fallback. \
-             The cache entry with config_file=None (global fallback) is never invalidated \
-             when a new config file appears in the project directory.",
-            indent_after
+        assert!(
+            entry.config_file.is_some(),
+            "Cache entry should reference the newly discovered config file"
         );
     }
 }

@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache on change
 - **LSP**: Create source.fixAll action for single-issue files
 - **LSP**: Skip external code-block-tools on keystroke events to reduce latency
+- **LSP**: Detect stale global-fallback entries in config cache so newly created
+  `.rumdl.toml` files are picked up without restarting the language server
 - Docs: Fix multi-paragraph list item indentation (thanks @sisp in #465)
 
 ### Changed
