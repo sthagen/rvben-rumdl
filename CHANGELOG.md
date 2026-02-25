@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.29] - 2026-02-25
+
+### Added
+
+- **MD077**: New `list-continuation-indent` rule that checks list item continuation
+  lines use the correct indentation (content-aligned rather than tab-stop-aligned)
+- **LSP**: Go-to-definition and find-references for markdown links, enabling
+  navigation between link references and their definitions
+- **LSP**: Surface code-block-tools diagnostics in server mode so language-specific
+  linting errors appear in the editor
+- **MD044**: Honor backtick-delimited code in HTML comments when checking proper names
+
+### Fixed
+
+- **MD013**: Exempt link reference definitions and standalone link/image lines from
+  reflow line-length checks inside list items. Previously, these exempt lines were
+  joined with other content, producing incorrect combined lengths (e.g., 160 instead
+  of the actual line length) ([#466](https://github.com/rvben/rumdl/issues/466))
+- **MD013**: Normalize reflow mode now checks each paragraph independently instead of
+  joining all content across paragraph boundaries. Exempt paragraphs (link ref defs,
+  standalone links) are preserved verbatim during reflow output
+- **LSP**: Close 4 navigation gaps in go-to-definition and find-references
+- **LSP**: Count fixable warnings document-wide for source.fixAll and clear config
+  cache on change
+- **LSP**: Create source.fixAll action for single-issue files
+- **LSP**: Skip external code-block-tools on keystroke events to reduce latency
+- Docs: Fix multi-paragraph list item indentation (thanks @sisp in #465)
+
+### Changed
+
+- **LSP**: source.fixAll code action now respects MD007 indent configuration
+
 ## [0.1.28] - 2026-02-24
 
 ### Added

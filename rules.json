@@ -704,5 +704,15 @@
     "fix": "Fix is always available.",
     "fix_availability": "Always",
     "url": "https://rumdl.dev/md076/"
+  },
+  {
+    "code": "MD077",
+    "name": "list-continuation-indent",
+    "aliases": [],
+    "summary": "List continuation content indentation",
+    "category": "list",
+    "fix": "Fix is always available.",
+    "fix_availability": "Always",
+    "url": "https://rumdl.dev/md077/"
   }
 ]
