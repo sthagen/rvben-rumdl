@@ -289,3 +289,155 @@ fn test_html_comments() {
         "Should fix names in HTML comments by default"
     );
 }
+
+#[test]
+fn test_html_comments_backtick_code_skipped() {
+    // Backtick-wrapped text in HTML comments should be treated as code
+    // when code_blocks is false (the default for MD044ProperNames::new)
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, false);
+    let content = "# Heading\n\n<!-- Use javascript here -->\n<!-- Use `javascript` here -->";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // Line 3: "javascript" not in backticks -> flagged
+    // Line 4: "javascript" in backticks -> skipped (treated as code)
+    assert_eq!(
+        result.len(),
+        1,
+        "Should only flag 'javascript' in non-backtick HTML comment, got: {:?}",
+        result
+    );
+    assert_eq!(result[0].line, 3);
+}
+
+#[test]
+fn test_html_comments_double_backtick_code_skipped() {
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, false);
+    let content = "# Heading\n\n<!-- This is a ``javascript`` command. -->";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // "javascript" inside double backticks should be skipped
+    assert_eq!(
+        result.len(),
+        0,
+        "Should skip name inside double backticks in HTML comment"
+    );
+}
+
+#[test]
+fn test_html_comments_unclosed_backtick_not_code() {
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, false);
+    let content = "# Heading\n\n<!-- This is a `javascript command. -->";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // Unclosed backtick should NOT be treated as code
+    assert_eq!(result.len(), 1, "Unclosed backtick should not suppress the violation");
+}
+
+#[test]
+fn test_html_comments_multiple_code_spans() {
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, false);
+    let content = "# Heading\n\n<!-- `javascript` and `javascript` are both code -->";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // Both occurrences are in backticks, should both be skipped
+    assert_eq!(result.len(), 0, "Both backtick-wrapped occurrences should be skipped");
+}
+
+#[test]
+fn test_html_comments_mixed_code_and_prose() {
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, false);
+    let content = "# Heading\n\n<!-- javascript and `javascript` in same comment -->";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // First "javascript" is NOT in backticks (flagged), second IS (skipped)
+    assert_eq!(result.len(), 1, "Should only flag the non-backtick occurrence");
+}
+
+#[test]
+fn test_regular_markdown_backticks_still_work() {
+    // Ensure we didn't break regular markdown code span handling
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, false);
+    let content = "# Heading\n\nThis is javascript and `javascript` in backticks.";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // "javascript" in regular text flagged, "javascript" in backticks skipped (by pulldown-cmark)
+    assert_eq!(result.len(), 1, "Regular markdown backtick handling should still work");
+}
+
+#[test]
+fn test_html_block_backtick_code_skipped() {
+    // Backtick-wrapped text in HTML blocks should also be treated as code
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, false);
+    let content = "# Heading\n\n<div>\nUse javascript here and `javascript` in backticks.\n</div>";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // "javascript" bare in HTML block -> flagged; in backticks -> skipped
+    assert_eq!(
+        result.len(),
+        1,
+        "Should only flag bare name in HTML block, not backtick-wrapped"
+    );
+}
+
+#[test]
+fn test_html_comments_backtick_code_blocks_true() {
+    // When code_blocks = true, backtick-wrapped text should still be flagged
+    // MD044ProperNames::new(names, true) sets code_blocks = true
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, true);
+    let content = "# Heading\n\n<!-- Use `javascript` here -->";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // code_blocks = true means check inside code too, so backticks don't help
+    assert_eq!(
+        result.len(),
+        1,
+        "With code_blocks=true, backtick-wrapped text should still be flagged"
+    );
+}
+
+#[test]
+fn test_html_comments_backtick_autofix() {
+    // Autofix should fix bare names but leave backtick-wrapped names unchanged
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, false);
+    let content = "# Heading\n\n<!-- Use javascript here and `javascript` in backticks. -->";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let fixed = rule.fix(&ctx).unwrap();
+
+    // Bare "javascript" fixed to "JavaScript", backtick-wrapped left alone
+    assert_eq!(
+        fixed,
+        "# Heading\n\n<!-- Use JavaScript here and `javascript` in backticks. -->"
+    );
+}
+
+#[test]
+fn test_html_comments_multiline_with_backticks() {
+    // Multi-line HTML comment where backtick code is on an interior line
+    let names = vec!["JavaScript".to_string()];
+    let rule = MD044ProperNames::new(names, false);
+    let content = "# Heading\n\n<!--\nUse javascript here.\nUse `javascript` as code.\n-->";
+    let ctx = rumdl_lib::lint_context::LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // Line 4: bare "javascript" -> flagged
+    // Line 5: backtick-wrapped -> skipped
+    assert_eq!(result.len(), 1, "Should only flag bare name in multi-line HTML comment");
+    assert_eq!(result[0].line, 4);
+}

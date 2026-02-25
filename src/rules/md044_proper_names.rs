@@ -332,8 +332,18 @@ impl MD044ProperNames {
                         }
 
                         // Skip if in inline code when code_blocks is false
-                        if !self.config.code_blocks && ctx.is_in_code_block_or_span(byte_pos) {
-                            continue;
+                        if !self.config.code_blocks {
+                            if ctx.is_in_code_block_or_span(byte_pos) {
+                                continue;
+                            }
+                            // pulldown-cmark doesn't parse markdown syntax inside HTML
+                            // comments or HTML blocks, so backtick-wrapped text isn't
+                            // detected by is_in_code_block_or_span. Check directly.
+                            if (line_info.in_html_comment || line_info.in_html_block)
+                                && Self::is_in_backtick_code_in_line(line, start_pos)
+                            {
+                                continue;
+                            }
                         }
 
                         // Skip if in link URL or reference definition
@@ -481,6 +491,57 @@ impl MD044ProperNames {
                 }
             }
             i += 1;
+        }
+        false
+    }
+
+    /// Check if a position within a line falls inside backtick-delimited code.
+    ///
+    /// pulldown-cmark does not parse markdown syntax inside HTML comments, so
+    /// `ctx.is_in_code_block_or_span` returns false for backtick-wrapped text
+    /// within comments. This function detects backtick code spans directly in
+    /// the line text following CommonMark rules: a code span starts with N
+    /// backticks and ends with exactly N backticks.
+    fn is_in_backtick_code_in_line(line: &str, pos: usize) -> bool {
+        let bytes = line.as_bytes();
+        let len = bytes.len();
+        let mut i = 0;
+        while i < len {
+            if bytes[i] == b'`' {
+                // Count the opening backtick sequence length
+                let open_start = i;
+                while i < len && bytes[i] == b'`' {
+                    i += 1;
+                }
+                let tick_len = i - open_start;
+
+                // Scan forward for a closing sequence of exactly tick_len backticks
+                while i < len {
+                    if bytes[i] == b'`' {
+                        let close_start = i;
+                        while i < len && bytes[i] == b'`' {
+                            i += 1;
+                        }
+                        if i - close_start == tick_len {
+                            // Matched pair found; the code span content is between
+                            // the end of the opening backticks and the start of the
+                            // closing backticks (exclusive of the backticks themselves).
+                            let content_start = open_start + tick_len;
+                            let content_end = close_start;
+                            if pos >= content_start && pos < content_end {
+                                return true;
+                            }
+                            // Continue scanning after this pair
+                            break;
+                        }
+                        // Not the right length; keep scanning
+                    } else {
+                        i += 1;
+                    }
+                }
+            } else {
+                i += 1;
+            }
         }
         false
     }
@@ -2511,5 +2572,68 @@ Some javascript text.
             "Should only flag body lines, not Vale style/rule directives: got {result:?}"
         );
         assert_eq!(result[0].line, 5);
+    }
+
+    // --- is_in_backtick_code_in_line unit tests ---
+
+    #[test]
+    fn test_backtick_code_single_backticks() {
+        let line = "hello `world` bye";
+        // 'w' is at index 7, inside the backtick span (content between backticks at 6 and 12)
+        assert!(MD044ProperNames::is_in_backtick_code_in_line(line, 7));
+        // 'h' at index 0 is outside
+        assert!(!MD044ProperNames::is_in_backtick_code_in_line(line, 0));
+        // 'b' at index 14 is outside
+        assert!(!MD044ProperNames::is_in_backtick_code_in_line(line, 14));
+    }
+
+    #[test]
+    fn test_backtick_code_double_backticks() {
+        let line = "a ``code`` b";
+        // 'c' is at index 4, inside ``...``
+        assert!(MD044ProperNames::is_in_backtick_code_in_line(line, 4));
+        // 'a' at index 0 is outside
+        assert!(!MD044ProperNames::is_in_backtick_code_in_line(line, 0));
+        // 'b' at index 11 is outside
+        assert!(!MD044ProperNames::is_in_backtick_code_in_line(line, 11));
+    }
+
+    #[test]
+    fn test_backtick_code_unclosed() {
+        let line = "a `code b";
+        // No closing backtick, so nothing is a code span
+        assert!(!MD044ProperNames::is_in_backtick_code_in_line(line, 3));
+    }
+
+    #[test]
+    fn test_backtick_code_mismatched_count() {
+        // Single backtick opening, double backtick is not a match
+        let line = "a `code`` b";
+        // The single ` at index 2 doesn't match `` at index 7-8
+        // So 'c' at index 3 is NOT in a code span
+        assert!(!MD044ProperNames::is_in_backtick_code_in_line(line, 3));
+    }
+
+    #[test]
+    fn test_backtick_code_multiple_spans() {
+        let line = "`first` and `second`";
+        // 'f' at index 1 (inside first span)
+        assert!(MD044ProperNames::is_in_backtick_code_in_line(line, 1));
+        // 'a' at index 8 (between spans)
+        assert!(!MD044ProperNames::is_in_backtick_code_in_line(line, 8));
+        // 's' at index 13 (inside second span)
+        assert!(MD044ProperNames::is_in_backtick_code_in_line(line, 13));
+    }
+
+    #[test]
+    fn test_backtick_code_on_backtick_boundary() {
+        let line = "`code`";
+        // Position 0 is the opening backtick itself, not inside the span
+        assert!(!MD044ProperNames::is_in_backtick_code_in_line(line, 0));
+        // Position 5 is the closing backtick, not inside the span
+        assert!(!MD044ProperNames::is_in_backtick_code_in_line(line, 5));
+        // Position 1-4 are inside the span
+        assert!(MD044ProperNames::is_in_backtick_code_in_line(line, 1));
+        assert!(MD044ProperNames::is_in_backtick_code_in_line(line, 4));
     }
 }
