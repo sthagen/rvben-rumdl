@@ -23,7 +23,12 @@ jobs:
           install: true
 
       - name: Install mise tools
-        run: mise install --yes
+        run: |
+          for attempt in 1 2 3; do
+            mise install --yes && break
+            echo "Attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
 
       - name: Install Rust components
         run: rustup component add rustfmt clippy
@@ -48,7 +53,12 @@ jobs:
           install: true
 
       - name: Install mise tools
-        run: mise install --yes
+        run: |
+          for attempt in 1 2 3; do
+            mise install --yes && break
+            echo "Attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
 
       - name: Run tests
         run: make test-ci

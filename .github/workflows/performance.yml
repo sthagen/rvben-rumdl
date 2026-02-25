@@ -29,7 +29,12 @@ jobs:
           experimental: true
 
       - name: Install mise tools
-        run: mise install
+        run: |
+          for attempt in 1 2 3; do
+            mise install --yes && break
+            echo "Attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
 
       - name: Install Rust components
         run: |
