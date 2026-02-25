@@ -1521,11 +1521,45 @@ impl MD013LineLength {
                     blocks.push(Block::Paragraph(current_paragraph));
                 }
 
+                // Helper: check if a line (raw source or stripped content) is exempt
+                // from line-length checks. Link reference definitions are always exempt;
+                // standalone link/image lines are exempt when strict mode is off.
+                // Also checks content after stripping list markers, since list item
+                // continuation lines may contain link ref defs.
+                let is_exempt_line = |raw_line: &str| -> bool {
+                    let trimmed = raw_line.trim();
+                    // Link reference definitions: always exempt
+                    if trimmed.starts_with('[') && trimmed.contains("]:") && LINK_REF_PATTERN.is_match(trimmed) {
+                        return true;
+                    }
+                    // Also check after stripping list markers (for list item content)
+                    if is_list_item(trimmed) {
+                        let (_, content) = extract_list_marker_and_content(trimmed);
+                        let content_trimmed = content.trim();
+                        if content_trimmed.starts_with('[')
+                            && content_trimmed.contains("]:")
+                            && LINK_REF_PATTERN.is_match(content_trimmed)
+                        {
+                            return true;
+                        }
+                    }
+                    // Standalone link/image lines: exempt when not strict
+                    if !config.strict && is_standalone_link_or_image_line(raw_line) {
+                        return true;
+                    }
+                    false
+                };
+
                 // Check if reflowing is needed (only for content paragraphs, not code blocks or nested lists)
+                // Exclude link reference definitions and standalone link lines from content
+                // so they don't pollute combined_content or trigger false reflow.
                 let content_lines: Vec<String> = list_item_lines
                     .iter()
                     .filter_map(|line| {
                         if let LineType::Content(s) = line {
+                            if is_exempt_line(s) {
+                                return None;
+                            }
                             Some(s.clone())
                         } else {
                             None
@@ -1598,13 +1632,25 @@ impl MD013LineLength {
                         let sentences = split_into_sentences(&combined_content);
                         sentences.len() > 1
                             || (list_start..i).any(|line_idx| {
-                                self.calculate_effective_length(lines[line_idx]) > config.line_length.get()
+                                let line = lines[line_idx];
+                                let trimmed = line.trim();
+                                if trimmed.is_empty() || is_exempt_line(line) {
+                                    return false;
+                                }
+                                self.calculate_effective_length(line) > config.line_length.get()
                             })
                     }
                     ReflowMode::Default => {
-                        // In default mode, only reflow if any individual line exceeds limit
-                        (list_start..i)
-                            .any(|line_idx| self.calculate_effective_length(lines[line_idx]) > config.line_length.get())
+                        // In default mode, only reflow if any individual non-exempt line exceeds limit
+                        (list_start..i).any(|line_idx| {
+                            let line = lines[line_idx];
+                            let trimmed = line.trim();
+                            // Skip blank lines and exempt lines
+                            if trimmed.is_empty() || is_exempt_line(line) {
+                                return false;
+                            }
+                            self.calculate_effective_length(line) > config.line_length.get()
+                        })
                     }
                 };
 
@@ -1931,10 +1977,19 @@ impl MD013LineLength {
                                 }
                             }
                             ReflowMode::Default => {
-                                let combined_length = self.calculate_effective_length(&full_line);
+                                // Report the actual longest non-exempt line, not the combined content
+                                let max_length = (list_start..i)
+                                    .filter(|&line_idx| {
+                                        let line = lines[line_idx];
+                                        let trimmed = line.trim();
+                                        !trimmed.is_empty() && !is_exempt_line(line)
+                                    })
+                                    .map(|line_idx| self.calculate_effective_length(lines[line_idx]))
+                                    .max()
+                                    .unwrap_or(0);
                                 format!(
                                     "Line length {} exceeds {} characters",
-                                    combined_length,
+                                    max_length,
                                     config.line_length.get()
                                 )
                             }
