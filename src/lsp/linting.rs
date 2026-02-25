@@ -7,6 +7,8 @@
 use anyhow::Result;
 use tower_lsp::lsp_types::*;
 
+use crate::code_block_tools::CodeBlockToolProcessor;
+use crate::embedded_lint::{check_embedded_markdown_blocks, should_lint_embedded_markdown};
 use crate::lint;
 use crate::rule::FixCapability;
 use crate::rules;
@@ -143,6 +145,36 @@ impl RumdlLanguageServer {
                             log::warn!("Failed to run cross-file checks for {uri}: {e}");
                         }
                     }
+                }
+            }
+        }
+
+        // Check embedded markdown blocks if configured in code-block-tools
+        if should_lint_embedded_markdown(&rumdl_config.code_block_tools) {
+            let embedded_warnings = check_embedded_markdown_blocks(text, &filtered_rules, &rumdl_config);
+            all_warnings.extend(embedded_warnings);
+        }
+
+        // Run code-block-tools linting if enabled
+        if rumdl_config.code_block_tools.enabled {
+            let processor = CodeBlockToolProcessor::new(&rumdl_config.code_block_tools, flavor);
+            match processor.lint(text) {
+                Ok(diagnostics) => {
+                    let tool_warnings: Vec<_> = diagnostics.iter().map(|d| d.to_lint_warning()).collect();
+                    all_warnings.extend(tool_warnings);
+                }
+                Err(e) => {
+                    log::warn!("Code block tools linting failed: {e}");
+                    all_warnings.push(crate::rule::LintWarning {
+                        message: e.to_string(),
+                        line: 1,
+                        column: 1,
+                        end_line: 1,
+                        end_column: 1,
+                        severity: crate::rule::Severity::Error,
+                        fix: None,
+                        rule_name: Some("code-block-tools".to_string()),
+                    });
                 }
             }
         }

@@ -4500,3 +4500,167 @@ indent = 4
         "The surviving entry is the stale global fallback"
     );
 }
+
+// ─── Embedded markdown and code-block-tools integration tests ───
+
+/// Helper to create a code-block-tools config with rumdl enabled for markdown blocks
+fn make_embedded_markdown_config() -> crate::code_block_tools::CodeBlockToolsConfig {
+    let lang = crate::code_block_tools::LanguageToolConfig {
+        enabled: true,
+        lint: vec!["rumdl".to_string()],
+        format: Vec::new(),
+        on_error: None,
+    };
+    let mut config = crate::code_block_tools::CodeBlockToolsConfig::default();
+    config.enabled = true;
+    config.languages.insert("markdown".to_string(), lang);
+    config
+}
+
+#[tokio::test]
+async fn test_lint_document_embedded_markdown_when_enabled() {
+    let server = create_test_server();
+
+    // Enable code-block-tools with rumdl for markdown
+    {
+        let mut cfg = server.rumdl_config.write().await;
+        cfg.code_block_tools = make_embedded_markdown_config();
+    }
+
+    let uri = Url::parse("file:///test.md").unwrap();
+    // The embedded markdown block has trailing spaces (MD009 violation)
+    let text = "# Test\n\n```markdown\n# Hello  \n```\n";
+
+    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+
+    // Should contain a diagnostic from the embedded block (trailing spaces on line 4)
+    let embedded_diags: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| {
+            // Line 4 (0-indexed: 3) is the "# Hello  " line inside the code block
+            d.range.start.line == 3
+        })
+        .collect();
+
+    assert!(
+        !embedded_diags.is_empty(),
+        "Expected embedded markdown diagnostics for trailing spaces inside code block, got none. All diagnostics: {diagnostics:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_lint_document_no_embedded_markdown_when_disabled() {
+    let server = create_test_server();
+
+    // code_block_tools defaults to disabled
+    let uri = Url::parse("file:///test.md").unwrap();
+    let text = "# Test\n\n```markdown\n# Hello  \n```\n";
+
+    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+
+    // No diagnostics should come from the embedded block (line 4, 0-indexed: 3)
+    // since code-block-tools is not enabled
+    let embedded_diags: Vec<_> = diagnostics.iter().filter(|d| d.range.start.line == 3).collect();
+
+    assert!(
+        embedded_diags.is_empty(),
+        "Expected no embedded markdown diagnostics when code-block-tools is disabled, but got: {embedded_diags:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_lint_document_embedded_markdown_empty_block() {
+    let server = create_test_server();
+
+    {
+        let mut cfg = server.rumdl_config.write().await;
+        cfg.code_block_tools = make_embedded_markdown_config();
+    }
+
+    let uri = Url::parse("file:///test.md").unwrap();
+    // Empty embedded markdown block should produce no extra diagnostics
+    let text = "# Test\n\n```markdown\n```\n";
+
+    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+
+    // No diagnostics from the embedded block (it's empty)
+    let embedded_diags: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.range.start.line >= 2 && d.range.start.line <= 3)
+        .collect();
+
+    assert!(
+        embedded_diags.is_empty(),
+        "Expected no diagnostics from empty embedded markdown block, got: {embedded_diags:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_lint_document_multiple_embedded_blocks() {
+    let server = create_test_server();
+
+    {
+        let mut cfg = server.rumdl_config.write().await;
+        cfg.code_block_tools = make_embedded_markdown_config();
+    }
+
+    let uri = Url::parse("file:///test.md").unwrap();
+    // Two markdown blocks, each with trailing spaces
+    let text = "# Test\n\n```markdown\n# One  \n```\n\n```markdown\n# Two  \n```\n";
+
+    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+
+    // Should have diagnostics from both embedded blocks
+    let block1_diags: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.range.start.line == 3) // "# One  " is line 4 (0-indexed: 3)
+        .collect();
+
+    let block2_diags: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.range.start.line == 7) // "# Two  " is line 8 (0-indexed: 7)
+        .collect();
+
+    assert!(
+        !block1_diags.is_empty(),
+        "Expected diagnostics from first embedded block. All diagnostics: {diagnostics:?}"
+    );
+    assert!(
+        !block2_diags.is_empty(),
+        "Expected diagnostics from second embedded block. All diagnostics: {diagnostics:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_lint_document_embedded_markdown_md_alias() {
+    let server = create_test_server();
+
+    // Enable for "md" alias instead of "markdown"
+    {
+        let mut cfg = server.rumdl_config.write().await;
+        let mut cbt = crate::code_block_tools::CodeBlockToolsConfig::default();
+        cbt.enabled = true;
+        cbt.languages.insert(
+            "md".to_string(),
+            crate::code_block_tools::LanguageToolConfig {
+                enabled: true,
+                lint: vec!["rumdl".to_string()],
+                format: Vec::new(),
+                on_error: None,
+            },
+        );
+        cfg.code_block_tools = cbt;
+    }
+
+    let uri = Url::parse("file:///test.md").unwrap();
+    let text = "# Test\n\n```md\n# Hello  \n```\n";
+
+    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+
+    let embedded_diags: Vec<_> = diagnostics.iter().filter(|d| d.range.start.line == 3).collect();
+
+    assert!(
+        !embedded_diags.is_empty(),
+        "Expected embedded markdown diagnostics for `md` alias. All diagnostics: {diagnostics:?}"
+    );
+}

@@ -2,24 +2,22 @@
 //!
 //! Handles detecting, linting, and formatting markdown content
 //! embedded inside fenced code blocks with `markdown` or `md` language.
+//!
+//! Check/lint functions delegate to `rumdl_lib::embedded_lint` so that
+//! both the CLI and the LSP share the same implementation.
 
 use rumdl_lib::config as rumdl_config;
 use rumdl_lib::lint_context::LintContext;
 use rumdl_lib::rule::Rule;
 use rumdl_lib::utils::code_block_utils::CodeBlockUtils;
 
-/// Maximum recursion depth for formatting nested markdown blocks.
-///
-/// This prevents stack overflow from deeply nested or maliciously crafted content.
-/// The value of 5 is chosen because:
-/// - Real-world usage rarely exceeds 2-3 levels (e.g., docs showing example markdown)
-/// - 5 levels provides headroom for legitimate use cases
-/// - Beyond 5 levels, the content is likely either malicious or unintentional
-pub(super) const MAX_EMBEDDED_DEPTH: usize = 5;
+// Re-export check/lint functions from the library crate
+pub use rumdl_lib::embedded_lint::check_embedded_markdown_blocks;
+pub(super) use rumdl_lib::embedded_lint::has_fenced_code_blocks;
+pub(super) use rumdl_lib::embedded_lint::should_lint_embedded_markdown;
 
-pub(super) fn has_fenced_code_blocks(content: &str) -> bool {
-    content.contains("```") || content.contains("~~~")
-}
+/// Maximum recursion depth for formatting nested markdown blocks.
+pub(super) const MAX_EMBEDDED_DEPTH: usize = rumdl_lib::embedded_lint::MAX_EMBEDDED_DEPTH;
 
 /// Format markdown content embedded in fenced code blocks with `markdown` or `md` language.
 ///
@@ -137,187 +135,10 @@ fn format_embedded_markdown_blocks_recursive(
     formatted_count
 }
 
-/// Check if embedded markdown linting is enabled via code-block-tools configuration.
-///
-/// Returns true if the special "rumdl" tool is configured for markdown/md language,
-/// indicating that rumdl's built-in markdown linting should be applied to markdown code blocks.
-pub(super) fn should_lint_embedded_markdown(config: &rumdl_lib::code_block_tools::CodeBlockToolsConfig) -> bool {
-    if !config.enabled {
-        return false;
-    }
-
-    // Check if markdown language is configured with the built-in rumdl tool
-    // Also check "md" since it's a common alias
-    for lang_key in ["markdown", "md"] {
-        if let Some(lang_config) = config.languages.get(lang_key)
-            && lang_config.enabled
-            && lang_config
-                .lint
-                .iter()
-                .any(|tool| tool == rumdl_lib::code_block_tools::RUMDL_BUILTIN_TOOL)
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
-/// Check markdown content embedded in fenced code blocks with `markdown` or `md` language.
-///
-/// This function detects markdown code blocks and runs lint checks on their content,
-/// returning warnings with adjusted line numbers that point to the correct location
-/// in the parent file.
-///
-/// Returns a vector of warnings from all embedded markdown blocks.
-pub fn check_embedded_markdown_blocks(
-    content: &str,
-    rules: &[Box<dyn Rule>],
-    config: &rumdl_config::Config,
-) -> Vec<rumdl_lib::rule::LintWarning> {
-    check_embedded_markdown_blocks_recursive(content, rules, config, 0)
-}
-
-/// Internal recursive implementation with depth tracking.
-fn check_embedded_markdown_blocks_recursive(
-    content: &str,
-    rules: &[Box<dyn Rule>],
-    config: &rumdl_config::Config,
-    depth: usize,
-) -> Vec<rumdl_lib::rule::LintWarning> {
-    // Prevent excessive recursion
-    if depth >= MAX_EMBEDDED_DEPTH {
-        return Vec::new();
-    }
-    if !has_fenced_code_blocks(content) {
-        return Vec::new();
-    }
-
-    let blocks = CodeBlockUtils::detect_markdown_code_blocks(content);
-
-    if blocks.is_empty() {
-        return Vec::new();
-    }
-
-    // Parse inline config from the parent content to respect disable/enable directives
-    let inline_config = rumdl_lib::inline_config::InlineConfig::from_content(content);
-
-    let mut all_warnings = Vec::new();
-
-    for block in blocks {
-        // Extract the content between the fences
-        let block_content = &content[block.content_start..block.content_end];
-
-        // Skip empty blocks
-        if block_content.trim().is_empty() {
-            continue;
-        }
-
-        // Calculate the line offset for this block
-        // Count newlines before content_start to get the starting line number
-        let line_offset = content[..block.content_start].matches('\n').count();
-
-        // Compute the line number of the block's opening fence (1-indexed)
-        // The inline config state at this line determines which rules are disabled
-        let block_line = line_offset + 1;
-
-        // Filter rules based on inline config at this block's location
-        let block_rules: Vec<&Box<dyn Rule>> = rules
-            .iter()
-            .filter(|rule| !inline_config.is_rule_disabled(rule.name(), block_line))
-            .collect();
-
-        // Strip common indentation from all lines
-        let (stripped_content, _common_indent) = strip_common_indent(block_content);
-
-        // First, recursively check any nested markdown blocks
-        // Clone rules for recursion since we need owned values
-        let block_rules_owned: Vec<Box<dyn Rule>> = block_rules.iter().map(|r| dyn_clone::clone_box(&***r)).collect();
-        let nested_warnings =
-            check_embedded_markdown_blocks_recursive(&stripped_content, &block_rules_owned, config, depth + 1);
-
-        // Adjust nested warning line numbers and add to results
-        for mut warning in nested_warnings {
-            warning.line += line_offset;
-            warning.end_line += line_offset;
-            // Clear fix since byte offsets won't be valid for parent file
-            warning.fix = None;
-            all_warnings.push(warning);
-        }
-
-        // Create a context and collect warnings for the embedded content
-        // Skip file-scoped rules that don't apply to embedded snippets
-        let ctx = LintContext::new(&stripped_content, config.markdown_flavor(), None);
-        for rule in &block_rules {
-            // Skip file-scoped rules for embedded content
-            match rule.name() {
-                "MD041" => continue, // "First line in file should be heading" - not a file
-                "MD047" => continue, // "File should end with newline" - not a file
-                _ => {}
-            }
-
-            if let Ok(rule_warnings) = rule.check(&ctx) {
-                for warning in rule_warnings {
-                    // Create adjusted warning with correct line numbers
-                    let adjusted_warning = rumdl_lib::rule::LintWarning {
-                        message: warning.message.clone(),
-                        line: warning.line + line_offset,
-                        column: warning.column,
-                        end_line: warning.end_line + line_offset,
-                        end_column: warning.end_column,
-                        severity: warning.severity,
-                        fix: None, // Clear fix since byte offsets won't be valid
-                        rule_name: warning.rule_name,
-                    };
-                    all_warnings.push(adjusted_warning);
-                }
-            }
-        }
-    }
-
-    all_warnings
-}
-
 /// Strip common leading indentation from all non-empty lines.
 /// Returns the stripped content and the common indent string.
 pub(super) fn strip_common_indent(content: &str) -> (String, String) {
-    let lines: Vec<&str> = content.lines().collect();
-    let has_trailing_newline = content.ends_with('\n');
-
-    // Find minimum indentation among non-empty lines
-    let min_indent = lines
-        .iter()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.len() - line.trim_start().len())
-        .min()
-        .unwrap_or(0);
-
-    // Build the stripped content
-    let mut stripped: String = lines
-        .iter()
-        .map(|line| {
-            if line.trim().is_empty() {
-                // Preserve empty lines as empty (no spaces)
-                ""
-            } else if line.len() >= min_indent {
-                &line[min_indent..]
-            } else {
-                // Fallback: strip what we can
-                line.trim_start()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Preserve trailing newline if original had one
-    if has_trailing_newline && !stripped.ends_with('\n') {
-        stripped.push('\n');
-    }
-
-    // Return the common indent string (spaces)
-    let indent_str = " ".repeat(min_indent);
-
-    (stripped, indent_str)
+    rumdl_lib::embedded_lint::strip_common_indent(content)
 }
 
 /// Restore indentation to all non-empty lines.

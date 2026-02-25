@@ -1,5 +1,6 @@
 pub mod code_block_tools;
 pub mod config;
+pub mod embedded_lint;
 pub mod exit_codes;
 pub mod filtered_lines;
 pub mod fix_coordinator;
