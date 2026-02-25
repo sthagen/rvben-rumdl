@@ -74,8 +74,17 @@ impl RumdlLanguageServer {
         false
     }
 
-    /// Lint a document and return diagnostics
-    pub(crate) async fn lint_document(&self, uri: &Url, text: &str) -> Result<Vec<Diagnostic>> {
+    /// Lint a document and return diagnostics.
+    ///
+    /// When `run_external_tools` is false, external code-block-tools (which spawn
+    /// processes) are skipped. Use false for high-frequency events like `did_change`
+    /// to avoid spawning processes on every keystroke.
+    pub(crate) async fn lint_document(
+        &self,
+        uri: &Url,
+        text: &str,
+        run_external_tools: bool,
+    ) -> Result<Vec<Diagnostic>> {
         let config_guard = self.config.read().await;
 
         // Skip linting if disabled
@@ -155,8 +164,8 @@ impl RumdlLanguageServer {
             all_warnings.extend(embedded_warnings);
         }
 
-        // Run code-block-tools linting if enabled
-        if rumdl_config.code_block_tools.enabled {
+        // Run external code-block-tools only when requested (skip on keystroke events)
+        if run_external_tools && rumdl_config.code_block_tools.enabled {
             let processor = CodeBlockToolProcessor::new(&rumdl_config.code_block_tools, flavor);
             match processor.lint(text) {
                 Ok(diagnostics) => {
@@ -188,7 +197,7 @@ impl RumdlLanguageServer {
     /// This method pushes diagnostics to the client via publishDiagnostics.
     /// When the client supports pull diagnostics (textDocument/diagnostic),
     /// we skip pushing to avoid duplicate diagnostics.
-    pub(super) async fn update_diagnostics(&self, uri: Url, text: String) {
+    pub(super) async fn update_diagnostics(&self, uri: Url, text: String, run_external_tools: bool) {
         // Skip pushing if client supports pull diagnostics to avoid duplicates
         if *self.client_supports_pull_diagnostics.read().await {
             log::debug!("Skipping push diagnostics for {uri} - client supports pull model");
@@ -201,7 +210,7 @@ impl RumdlLanguageServer {
             docs.get(&uri).and_then(|entry| entry.version)
         };
 
-        match self.lint_document(&uri, &text).await {
+        match self.lint_document(&uri, &text, run_external_tools).await {
             Ok(diagnostics) => {
                 self.client.publish_diagnostics(uri, diagnostics, version).await;
             }

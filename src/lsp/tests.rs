@@ -64,7 +64,7 @@ async fn test_lint_document() {
     let uri = Url::parse("file:///test.md").unwrap();
     let text = "# Test\n\nThis is a test  \nWith trailing spaces  ";
 
-    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+    let diagnostics = server.lint_document(&uri, text, true).await.unwrap();
 
     // Should find trailing spaces violations
     assert!(!diagnostics.is_empty());
@@ -81,7 +81,7 @@ async fn test_lint_document_disabled() {
     let uri = Url::parse("file:///test.md").unwrap();
     let text = "# Test\n\nThis is a test  \nWith trailing spaces  ";
 
-    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+    let diagnostics = server.lint_document(&uri, text, true).await.unwrap();
 
     // Should return empty diagnostics when disabled
     assert!(diagnostics.is_empty());
@@ -343,7 +343,7 @@ async fn test_empty_document_handling() {
     let text = "";
 
     // Test linting empty document
-    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+    let diagnostics = server.lint_document(&uri, text, true).await.unwrap();
     assert!(diagnostics.is_empty());
 
     // Test code actions on empty document
@@ -2781,7 +2781,7 @@ reflow-mode = "semantic-line-breaks"
 
     // Lint via LSP path with CRLF content
     let uri = Url::from_file_path(&canonical_test_path).unwrap();
-    let diagnostics = server.lint_document(&uri, content_crlf).await.unwrap();
+    let diagnostics = server.lint_document(&uri, content_crlf, true).await.unwrap();
 
     // Filter for MD013 diagnostics
     let md013_diagnostics: Vec<_> = diagnostics
@@ -2841,7 +2841,7 @@ reflow-mode = "semantic-line-breaks"
     server.workspace_roots.write().await.push(canonical_temp);
 
     let uri = Url::from_file_path(&canonical_test_path).unwrap();
-    let diagnostics = server.lint_document(&uri, content_crlf).await.unwrap();
+    let diagnostics = server.lint_document(&uri, content_crlf, true).await.unwrap();
 
     let md013_diagnostics: Vec<_> = diagnostics
         .iter()
@@ -2911,7 +2911,7 @@ reflow-mode = "semantic-line-breaks"
     *server.rumdl_config.write().await = file_config;
 
     // Lint via LSP path
-    let diagnostics = server.lint_document(&uri, content).await.unwrap();
+    let diagnostics = server.lint_document(&uri, content, true).await.unwrap();
 
     // Filter for MD013 diagnostics
     let md013_diagnostics: Vec<_> = diagnostics
@@ -3052,7 +3052,7 @@ reflow-mode = "semantic-line-breaks"
 
     // Also test the full lint_document path
     let uri = Url::from_file_path(&canonical_test_path).unwrap();
-    let diagnostics = server.lint_document(&uri, content).await.unwrap();
+    let diagnostics = server.lint_document(&uri, content, true).await.unwrap();
     let md013_diags: Vec<_> = diagnostics
         .iter()
         .filter(|d| {
@@ -4531,7 +4531,7 @@ async fn test_lint_document_embedded_markdown_when_enabled() {
     // The embedded markdown block has trailing spaces (MD009 violation)
     let text = "# Test\n\n```markdown\n# Hello  \n```\n";
 
-    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+    let diagnostics = server.lint_document(&uri, text, true).await.unwrap();
 
     // Should contain a diagnostic from the embedded block (trailing spaces on line 4)
     let embedded_diags: Vec<_> = diagnostics
@@ -4556,7 +4556,7 @@ async fn test_lint_document_no_embedded_markdown_when_disabled() {
     let uri = Url::parse("file:///test.md").unwrap();
     let text = "# Test\n\n```markdown\n# Hello  \n```\n";
 
-    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+    let diagnostics = server.lint_document(&uri, text, true).await.unwrap();
 
     // No diagnostics should come from the embedded block (line 4, 0-indexed: 3)
     // since code-block-tools is not enabled
@@ -4581,7 +4581,7 @@ async fn test_lint_document_embedded_markdown_empty_block() {
     // Empty embedded markdown block should produce no extra diagnostics
     let text = "# Test\n\n```markdown\n```\n";
 
-    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+    let diagnostics = server.lint_document(&uri, text, true).await.unwrap();
 
     // No diagnostics from the embedded block (it's empty)
     let embedded_diags: Vec<_> = diagnostics
@@ -4608,7 +4608,7 @@ async fn test_lint_document_multiple_embedded_blocks() {
     // Two markdown blocks, each with trailing spaces
     let text = "# Test\n\n```markdown\n# One  \n```\n\n```markdown\n# Two  \n```\n";
 
-    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+    let diagnostics = server.lint_document(&uri, text, true).await.unwrap();
 
     // Should have diagnostics from both embedded blocks
     let block1_diags: Vec<_> = diagnostics
@@ -4655,7 +4655,7 @@ async fn test_lint_document_embedded_markdown_md_alias() {
     let uri = Url::parse("file:///test.md").unwrap();
     let text = "# Test\n\n```md\n# Hello  \n```\n";
 
-    let diagnostics = server.lint_document(&uri, text).await.unwrap();
+    let diagnostics = server.lint_document(&uri, text, true).await.unwrap();
 
     let embedded_diags: Vec<_> = diagnostics.iter().filter(|d| d.range.start.line == 3).collect();
 

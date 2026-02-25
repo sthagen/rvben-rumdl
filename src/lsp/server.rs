@@ -697,7 +697,7 @@ impl LanguageServer for RumdlLanguageServer {
         let tasks = doc_list.into_iter().map(|(uri, text)| {
             let server = self.clone();
             tokio::spawn(async move {
-                server.update_diagnostics(uri, text).await;
+                server.update_diagnostics(uri, text, true).await;
             })
         });
 
@@ -737,7 +737,7 @@ impl LanguageServer for RumdlLanguageServer {
                 .await;
         }
 
-        self.update_diagnostics(uri, text).await;
+        self.update_diagnostics(uri, text, true).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -765,7 +765,7 @@ impl LanguageServer for RumdlLanguageServer {
                     .await;
             }
 
-            self.update_diagnostics(uri, text).await;
+            self.update_diagnostics(uri, text, false).await;
         }
     }
 
@@ -813,7 +813,7 @@ impl LanguageServer for RumdlLanguageServer {
         // Re-lint the document after save
         // Note: Auto-fixing is now handled by will_save_wait_until which runs before the save
         if let Some(entry) = self.documents.read().await.get(&params.text_document.uri) {
-            self.update_diagnostics(params.text_document.uri, entry.content.clone())
+            self.update_diagnostics(params.text_document.uri, entry.content.clone(), true)
                 .await;
         }
     }
@@ -899,7 +899,7 @@ impl LanguageServer for RumdlLanguageServer {
             };
 
             for (uri, text) in docs_to_update {
-                self.update_diagnostics(uri, text).await;
+                self.update_diagnostics(uri, text, true).await;
             }
         }
     }
@@ -1105,7 +1105,7 @@ impl LanguageServer for RumdlLanguageServer {
         let uri = params.text_document.uri;
 
         if let Some(text) = self.get_open_document_content(&uri).await {
-            match self.lint_document(&uri, &text).await {
+            match self.lint_document(&uri, &text, true).await {
                 Ok(diagnostics) => Ok(DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(
                     RelatedFullDocumentDiagnosticReport {
                         related_documents: None,
