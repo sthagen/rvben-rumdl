@@ -38,12 +38,24 @@ pub struct MD076ListItemSpacing {
     config: MD076Config,
 }
 
+/// Classification of the spacing between two consecutive list items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GapKind {
+    /// No blank line between items.
+    Tight,
+    /// Blank line that is a genuine inter-item separator.
+    Loose,
+    /// Blank line required by another rule (MD031, MD058) after structural content.
+    /// Excluded from consistency analysis — neither loose nor tight.
+    Structural,
+}
+
 /// Per-block analysis result shared by check() and fix().
 struct BlockAnalysis {
     /// 1-indexed line numbers of items at this block's nesting level.
     items: Vec<usize>,
-    /// Whether each inter-item gap is loose (has a blank separator line).
-    gaps: Vec<bool>,
+    /// Classification of each inter-item gap.
+    gaps: Vec<GapKind>,
     /// Whether loose gaps are violations (should have blank lines removed).
     warn_loose_gaps: bool,
     /// Whether tight gaps are violations (should have blank lines inserted).
@@ -104,20 +116,18 @@ impl MD076ListItemSpacing {
         false
     }
 
-    /// Determine whether the inter-item gap between two consecutive items is loose.
+    /// Classify the inter-item gap between two consecutive items.
     ///
-    /// Only considers blank lines that are actual inter-item separators: the
-    /// consecutive blank lines immediately preceding the next item's marker.
-    /// Blank lines required by MD031 (blanks-around-fences) or MD058 (blanks-around-tables)
-    /// after structural content (code blocks, tables, HTML blocks) are not counted as
-    /// inter-item separators.
-    fn gap_is_loose(ctx: &LintContext, first: usize, next: usize) -> bool {
+    /// Returns `Tight` if there is no blank line, `Loose` if there is a genuine
+    /// inter-item separator blank, or `Structural` if the only blank line is
+    /// required by another rule (MD031/MD058) after structural content.
+    fn classify_gap(ctx: &LintContext, first: usize, next: usize) -> GapKind {
         if next <= first + 1 {
-            return false;
+            return GapKind::Tight;
         }
-        // The gap is loose if the line immediately before the next item is blank.
+        // The gap has a blank line only if the line immediately before the next item is blank.
         if !Self::is_effectively_blank(ctx, next - 1) {
-            return false;
+            return GapKind::Tight;
         }
         // Walk backwards past blank lines to find the last non-blank content line.
         // If that line is structural content, the blank is required (not a separator).
@@ -127,9 +137,9 @@ impl MD076ListItemSpacing {
         }
         // `scan` is now the last non-blank line before the next item
         if scan > first && Self::is_structural_content(ctx, scan) {
-            return false;
+            return GapKind::Structural;
         }
-        true
+        GapKind::Loose
     }
 
     /// Collect the 1-indexed line numbers of all inter-item blank lines in the gap.
@@ -181,18 +191,21 @@ impl MD076ListItemSpacing {
             return None;
         }
 
-        // Compute whether each inter-item gap is loose (has blank separator).
-        let gaps: Vec<bool> = items.windows(2).map(|w| Self::gap_is_loose(ctx, w[0], w[1])).collect();
+        // Classify each inter-item gap.
+        let gaps: Vec<GapKind> = items.windows(2).map(|w| Self::classify_gap(ctx, w[0], w[1])).collect();
 
-        let loose_count = gaps.iter().filter(|&&g| g).count();
-        let tight_count = gaps.len() - loose_count;
+        // Structural gaps are excluded from consistency analysis — they are
+        // required by other rules (MD031, MD058) and should not influence
+        // whether the list is considered loose or tight.
+        let loose_count = gaps.iter().filter(|&&g| g == GapKind::Loose).count();
+        let tight_count = gaps.iter().filter(|&&g| g == GapKind::Tight).count();
 
         let (warn_loose_gaps, warn_tight_gaps) = match style {
             ListItemSpacingStyle::Loose => (false, true),
             ListItemSpacingStyle::Tight => (true, false),
             ListItemSpacingStyle::Consistent => {
                 if loose_count == 0 || tight_count == 0 {
-                    return None; // Already consistent
+                    return None; // Already consistent (structural gaps excluded)
                 }
                 // Majority wins; on a tie, prefer loose (warn tight).
                 if loose_count >= tight_count {
@@ -233,40 +246,48 @@ impl Rule for MD076ListItemSpacing {
                 continue;
             };
 
-            for (i, &is_loose) in analysis.gaps.iter().enumerate() {
-                if is_loose && analysis.warn_loose_gaps {
-                    // Warn on the first inter-item blank line in this gap.
-                    let blanks = Self::inter_item_blanks(ctx, analysis.items[i], analysis.items[i + 1]);
-                    if let Some(&blank_line) = blanks.first() {
-                        let line_content = ctx
-                            .line_info(blank_line)
-                            .map(|li| li.content(ctx.content))
-                            .unwrap_or("");
+            for (i, &gap) in analysis.gaps.iter().enumerate() {
+                match gap {
+                    GapKind::Structural => {
+                        // Structural gaps are never warned about — they are required
+                        // by other rules (MD031, MD058).
+                    }
+                    GapKind::Loose if analysis.warn_loose_gaps => {
+                        // Warn on the first inter-item blank line in this gap.
+                        let blanks = Self::inter_item_blanks(ctx, analysis.items[i], analysis.items[i + 1]);
+                        if let Some(&blank_line) = blanks.first() {
+                            let line_content = ctx
+                                .line_info(blank_line)
+                                .map(|li| li.content(ctx.content))
+                                .unwrap_or("");
+                            warnings.push(LintWarning {
+                                rule_name: Some(self.name().to_string()),
+                                line: blank_line,
+                                column: 1,
+                                end_line: blank_line,
+                                end_column: line_content.len() + 1,
+                                message: "Unexpected blank line between list items".to_string(),
+                                severity: Severity::Warning,
+                                fix: None,
+                            });
+                        }
+                    }
+                    GapKind::Tight if analysis.warn_tight_gaps => {
+                        // Warn on the next item line (a blank line should precede it).
+                        let next_item = analysis.items[i + 1];
+                        let line_content = ctx.line_info(next_item).map(|li| li.content(ctx.content)).unwrap_or("");
                         warnings.push(LintWarning {
                             rule_name: Some(self.name().to_string()),
-                            line: blank_line,
+                            line: next_item,
                             column: 1,
-                            end_line: blank_line,
+                            end_line: next_item,
                             end_column: line_content.len() + 1,
-                            message: "Unexpected blank line between list items".to_string(),
+                            message: "Missing blank line between list items".to_string(),
                             severity: Severity::Warning,
                             fix: None,
                         });
                     }
-                } else if !is_loose && analysis.warn_tight_gaps {
-                    // Warn on the next item line (a blank line should precede it).
-                    let next_item = analysis.items[i + 1];
-                    let line_content = ctx.line_info(next_item).map(|li| li.content(ctx.content)).unwrap_or("");
-                    warnings.push(LintWarning {
-                        rule_name: Some(self.name().to_string()),
-                        line: next_item,
-                        column: 1,
-                        end_line: next_item,
-                        end_column: line_content.len() + 1,
-                        message: "Missing blank line between list items".to_string(),
-                        severity: Severity::Warning,
-                        fix: None,
-                    });
+                    _ => {}
                 }
             }
         }
@@ -288,14 +309,21 @@ impl Rule for MD076ListItemSpacing {
                 continue;
             };
 
-            for (i, &is_loose) in analysis.gaps.iter().enumerate() {
-                if is_loose && analysis.warn_loose_gaps {
-                    // Remove ALL inter-item blank lines in this gap
-                    for blank_line in Self::inter_item_blanks(ctx, analysis.items[i], analysis.items[i + 1]) {
-                        remove_lines.insert(blank_line);
+            for (i, &gap) in analysis.gaps.iter().enumerate() {
+                match gap {
+                    GapKind::Structural => {
+                        // Never modify structural blank lines.
                     }
-                } else if !is_loose && analysis.warn_tight_gaps {
-                    insert_before.insert(analysis.items[i + 1]);
+                    GapKind::Loose if analysis.warn_loose_gaps => {
+                        // Remove ALL inter-item blank lines in this gap
+                        for blank_line in Self::inter_item_blanks(ctx, analysis.items[i], analysis.items[i + 1]) {
+                            remove_lines.insert(blank_line);
+                        }
+                    }
+                    GapKind::Tight if analysis.warn_tight_gaps => {
+                        insert_before.insert(analysis.items[i + 1]);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -936,6 +964,155 @@ mod tests {
         assert_eq!(
             fixed, content,
             "Tight fix should not remove structural blanks around code blocks"
+        );
+    }
+
+    // ── Issue #461: 4-space indented code block in loose list ──────────
+
+    #[test]
+    fn four_space_indented_fence_in_loose_list_no_false_positive() {
+        // Reproduction case from issue #461 comment by @sisp.
+        // The fenced code block uses 4-space indentation inside an ordered list.
+        // The blank line after the closing fence is structural (required by MD031)
+        // and must not create a false "Missing blank line" warning.
+        let content = "\
+1. First item
+
+1. Second item with code block:
+
+    ```json
+    {\"key\": \"value\"}
+    ```
+
+1. Third item
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Consistent).is_empty(),
+            "Structural blank after 4-space indented code block should not cause false positive"
+        );
+    }
+
+    #[test]
+    fn four_space_indented_fence_tight_style_no_warnings() {
+        let content = "\
+1. First item
+1. Second item with code block:
+
+    ```json
+    {\"key\": \"value\"}
+    ```
+
+1. Third item
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Tight).is_empty(),
+            "Tight style should not warn about structural blanks with 4-space fences"
+        );
+    }
+
+    #[test]
+    fn four_space_indented_fence_loose_style_no_warnings() {
+        // All non-structural gaps are loose, structural gaps are excluded.
+        let content = "\
+1. First item
+
+1. Second item with code block:
+
+    ```json
+    {\"key\": \"value\"}
+    ```
+
+1. Third item
+";
+        assert!(
+            check(content, ListItemSpacingStyle::Loose).is_empty(),
+            "Loose style should not warn when structural gaps are the only non-loose gaps"
+        );
+    }
+
+    #[test]
+    fn structural_gap_with_genuine_inconsistency_still_warns() {
+        // Item 1 has a structural code block. Items 2-3 are genuinely loose,
+        // but items 3-4 are tight → genuine inconsistency should still warn.
+        let content = "\
+1. First item with code:
+
+    ```json
+    {\"key\": \"value\"}
+    ```
+
+1. Second item
+
+1. Third item
+1. Fourth item
+";
+        let warnings = check(content, ListItemSpacingStyle::Consistent);
+        assert!(
+            !warnings.is_empty(),
+            "Genuine loose/tight inconsistency should still warn even with structural gaps"
+        );
+    }
+
+    #[test]
+    fn four_space_fence_fix_is_idempotent() {
+        // Fix should not modify a list that has only structural gaps and
+        // genuine loose gaps — it's already consistent.
+        let content = "\
+1. First item
+
+1. Second item with code block:
+
+    ```json
+    {\"key\": \"value\"}
+    ```
+
+1. Third item
+";
+        let fixed = fix(content, ListItemSpacingStyle::Consistent);
+        assert_eq!(fixed, content, "Fix should be a no-op for lists with structural gaps");
+        let fixed_twice = fix(&fixed, ListItemSpacingStyle::Consistent);
+        assert_eq!(fixed, fixed_twice, "Fix should be idempotent");
+    }
+
+    #[test]
+    fn four_space_fence_fix_does_not_insert_duplicate_blank() {
+        // When tight style tries to fix, it should not insert a blank line
+        // before item 3 when one already exists (structural).
+        let content = "\
+1. First item
+1. Second item with code block:
+
+    ```json
+    {\"key\": \"value\"}
+    ```
+
+1. Third item
+";
+        let fixed = fix(content, ListItemSpacingStyle::Tight);
+        assert_eq!(fixed, content, "Tight fix should not modify structural blanks");
+    }
+
+    #[test]
+    fn mkdocs_flavor_code_block_in_list_no_false_positive() {
+        // MkDocs flavor with code block inside a list item.
+        // Reported by @sisp in issue #461 comment.
+        let content = "\
+1. First item
+
+1. Second item with code block:
+
+    ```json
+    {\"key\": \"value\"}
+    ```
+
+1. Third item
+";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::MkDocs, None);
+        let rule = MD076ListItemSpacing::new(ListItemSpacingStyle::Consistent);
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "MkDocs flavor with structural code block blank should not produce false positive, got: {warnings:?}"
         );
     }
 
