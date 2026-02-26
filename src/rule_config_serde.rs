@@ -46,6 +46,39 @@ pub fn load_rule_config<T: RuleConfig>(config: &crate::config::Config) -> T {
         .unwrap_or_default()
 }
 
+/// Sentinel value used in config schema tables to represent nullable (Option) fields.
+/// When a rule config field is `Option<T>` with default `None`, JSON serialization produces
+/// `null`, which `json_to_toml_value` drops. This sentinel preserves the key in the schema
+/// so config validation recognizes it as valid.
+const NULLABLE_SENTINEL: &str = "\0__nullable__";
+
+/// Returns true if the TOML value is a nullable sentinel placeholder.
+pub fn is_nullable_sentinel(value: &toml::Value) -> bool {
+    matches!(value, toml::Value::String(s) if s == NULLABLE_SENTINEL)
+}
+
+/// Build a TOML schema table from a rule config struct, preserving nullable (Option) keys.
+///
+/// Unlike the standard JSON→TOML path (which drops null keys), this function inserts a
+/// sentinel value for null JSON fields so the key still appears in the schema. The sentinel
+/// is filtered out by `RuleRegistry::expected_value_for()` to skip type checking for those keys.
+pub fn config_schema_table<T: RuleConfig>(config: &T) -> Option<toml::map::Map<String, toml::Value>> {
+    let json_value = serde_json::to_value(config).ok()?;
+    let obj = json_value.as_object()?;
+    let mut table = toml::map::Map::new();
+    for (k, v) in obj {
+        if v.is_null() {
+            table.insert(k.clone(), toml::Value::String(NULLABLE_SENTINEL.to_string()));
+        } else {
+            // Use the converted value, or fall back to a sentinel if conversion fails.
+            // Every field in the config struct should appear in the schema for key validation.
+            let toml_v = json_to_toml_value(v).unwrap_or_else(|| toml::Value::String(NULLABLE_SENTINEL.to_string()));
+            table.insert(k.clone(), toml_v);
+        }
+    }
+    Some(table)
+}
+
 /// Convert JSON value to TOML value for default config generation
 pub fn json_to_toml_value(json_val: &serde_json::Value) -> Option<toml::Value> {
     match json_val {
@@ -217,6 +250,114 @@ mod tests {
 
     impl RuleConfig for TestRuleConfig {
         const RULE_NAME: &'static str = "TEST001";
+    }
+
+    /// Config struct with nullable (Option) fields for testing sentinel behavior.
+    /// Mirrors the pattern used by MD072Config: no `skip_serializing_if`, so
+    /// `serde_json::to_value` produces `null` for None fields (which we convert to sentinels).
+    #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+    #[serde(default)]
+    struct NullableTestConfig {
+        #[serde(default)]
+        enabled: bool,
+        #[serde(default, alias = "key-order")]
+        key_order: Option<Vec<String>>,
+        #[serde(default, alias = "title-pattern")]
+        title_pattern: Option<String>,
+    }
+
+    impl RuleConfig for NullableTestConfig {
+        const RULE_NAME: &'static str = "TEST_NULLABLE";
+    }
+
+    #[test]
+    fn test_is_nullable_sentinel() {
+        let sentinel = toml::Value::String(NULLABLE_SENTINEL.to_string());
+        assert!(is_nullable_sentinel(&sentinel));
+
+        let regular = toml::Value::String("normal".to_string());
+        assert!(!is_nullable_sentinel(&regular));
+
+        let integer = toml::Value::Integer(42);
+        assert!(!is_nullable_sentinel(&integer));
+    }
+
+    #[test]
+    fn test_config_schema_table_preserves_nullable_keys() {
+        let config = NullableTestConfig::default();
+        let table = config_schema_table(&config).unwrap();
+
+        // All keys should be present, including the Option fields
+        assert!(table.contains_key("enabled"), "enabled key missing");
+        assert!(table.contains_key("key_order"), "key_order key missing");
+        assert!(table.contains_key("title_pattern"), "title_pattern key missing");
+
+        // Option fields should have sentinel values
+        assert!(is_nullable_sentinel(table.get("key_order").unwrap()));
+        assert!(is_nullable_sentinel(table.get("title_pattern").unwrap()));
+
+        // Non-option field should have real value
+        assert_eq!(table.get("enabled"), Some(&toml::Value::Boolean(false)));
+    }
+
+    #[test]
+    fn test_config_schema_table_non_null_option_uses_real_value() {
+        let config = NullableTestConfig {
+            enabled: true,
+            key_order: Some(vec!["title".to_string(), "date".to_string()]),
+            title_pattern: Some("pattern".to_string()),
+        };
+        let table = config_schema_table(&config).unwrap();
+
+        // Non-null Option fields should have real TOML values
+        let key_order = table.get("key_order").unwrap();
+        assert!(!is_nullable_sentinel(key_order));
+        assert!(matches!(key_order, toml::Value::Array(_)));
+
+        let title_pattern = table.get("title_pattern").unwrap();
+        assert!(!is_nullable_sentinel(title_pattern));
+        assert_eq!(title_pattern, &toml::Value::String("pattern".to_string()));
+    }
+
+    #[test]
+    fn test_json_to_toml_value_still_drops_null() {
+        // The existing json_to_toml_value behavior is preserved
+        assert!(json_to_toml_value(&serde_json::Value::Null).is_none());
+    }
+
+    #[test]
+    fn test_config_schema_table_all_keys_present() {
+        let config = NullableTestConfig::default();
+        let table = config_schema_table(&config).unwrap();
+        assert_eq!(table.len(), 3, "Expected 3 keys: enabled, key_order, title_pattern");
+    }
+
+    #[test]
+    fn test_config_schema_table_never_drops_keys() {
+        // Every field in a config struct must appear in the schema table,
+        // even if json_to_toml_value would fail for its value type.
+        // Build a JSON object manually with a value that json_to_toml_value drops (null).
+        let mut obj = serde_json::Map::new();
+        obj.insert("real_key".to_string(), serde_json::json!(42));
+        obj.insert("null_key".to_string(), serde_json::Value::Null);
+        let json = serde_json::Value::Object(obj);
+
+        // Simulate config_schema_table logic directly
+        let obj = json.as_object().unwrap();
+        let mut table = toml::map::Map::new();
+        for (k, v) in obj {
+            if v.is_null() {
+                table.insert(k.clone(), toml::Value::String(NULLABLE_SENTINEL.to_string()));
+            } else {
+                let toml_v =
+                    json_to_toml_value(v).unwrap_or_else(|| toml::Value::String(NULLABLE_SENTINEL.to_string()));
+                table.insert(k.clone(), toml_v);
+            }
+        }
+
+        assert_eq!(table.len(), 2, "Both keys must be present");
+        assert!(table.contains_key("real_key"));
+        assert!(table.contains_key("null_key"));
     }
 
     #[test]

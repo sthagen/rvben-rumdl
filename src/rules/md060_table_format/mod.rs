@@ -1,4 +1,5 @@
 use crate::rule::{LintError, LintResult, LintWarning, Rule, Severity};
+use crate::rule_config_serde::RuleConfig;
 use crate::utils::range_utils::calculate_line_range;
 use crate::utils::regex_cache::BLOCKQUOTE_PREFIX_RE;
 use crate::utils::table_utils::TableUtils;
@@ -1015,39 +1016,8 @@ impl Rule for MD060TableFormat {
     }
 
     fn default_config_section(&self) -> Option<(String, toml::Value)> {
-        // Build TOML table explicitly to include all keys, even optional ones
-        // (serde skips Option::None values, which causes config validation warnings)
-        let mut table = toml::map::Map::new();
-        table.insert("enabled".to_string(), toml::Value::Boolean(self.config.enabled));
-        table.insert("style".to_string(), toml::Value::String(self.config.style.clone()));
-        table.insert(
-            "max-width".to_string(),
-            toml::Value::Integer(self.config.max_width.get() as i64),
-        );
-        table.insert(
-            "column-align".to_string(),
-            toml::Value::String(
-                match self.config.column_align {
-                    ColumnAlign::Auto => "auto",
-                    ColumnAlign::Left => "left",
-                    ColumnAlign::Center => "center",
-                    ColumnAlign::Right => "right",
-                }
-                .to_string(),
-            ),
-        );
-        // Include optional keys with placeholder values so they're recognized as valid
-        table.insert(
-            "column-align-header".to_string(),
-            toml::Value::String("auto".to_string()),
-        );
-        table.insert("column-align-body".to_string(), toml::Value::String("auto".to_string()));
-        table.insert(
-            "loose-last-column".to_string(),
-            toml::Value::Boolean(self.config.loose_last_column),
-        );
-
-        Some((self.name().to_string(), toml::Value::Table(table)))
+        let table = crate::rule_config_serde::config_schema_table(&MD060Config::default())?;
+        Some((MD060Config::RULE_NAME.to_string(), toml::Value::Table(table)))
     }
 
     fn from_config(config: &crate::config::Config) -> Box<dyn Rule>

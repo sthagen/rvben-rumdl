@@ -104,37 +104,39 @@ impl RuleRegistry {
         })
     }
 
-    /// Get the expected value type for a rule's configuration key, trying variants
+    /// Get the expected value type for a rule's configuration key, trying variants.
+    /// Returns `None` for nullable sentinel values (Option fields with default None),
+    /// which signals the caller to skip type checking for that key.
     pub fn expected_value_for(&self, rule: &str, key: &str) -> Option<&toml::Value> {
-        if let Some(schema) = self.rule_schemas.get(rule) {
-            // Check if this key is an alias
-            if let Some(aliases) = self.rule_aliases.get(rule)
-                && let Some(canonical_key) = aliases.get(key)
-            {
-                // Use the canonical key for schema lookup
-                if let Some(value) = schema.get(canonical_key) {
-                    return Some(value);
-                }
-            }
+        let schema = self.rule_schemas.get(rule)?;
 
-            // Try the original key
-            if let Some(value) = schema.get(key) {
-                return Some(value);
-            }
-
-            // Try key variants
-            let key_variants = [
-                key.replace('-', "_"), // Convert kebab-case to snake_case
-                key.replace('_', "-"), // Convert snake_case to kebab-case
-                normalize_key(key),    // Normalized key (lowercase, kebab-case)
-            ];
-
-            for variant in &key_variants {
-                if let Some(value) = schema.get(variant) {
-                    return Some(value);
-                }
+        // Check if this key is an alias
+        if let Some(aliases) = self.rule_aliases.get(rule)
+            && let Some(canonical_key) = aliases.get(key)
+        {
+            if let Some(value) = schema.get(canonical_key) {
+                return filter_nullable_sentinel(value);
             }
         }
+
+        // Try the original key
+        if let Some(value) = schema.get(key) {
+            return filter_nullable_sentinel(value);
+        }
+
+        // Try key variants
+        let key_variants = [
+            key.replace('-', "_"), // Convert kebab-case to snake_case
+            key.replace('_', "-"), // Convert snake_case to kebab-case
+            normalize_key(key),    // Normalized key (lowercase, kebab-case)
+        ];
+
+        for variant in &key_variants {
+            if let Some(value) = schema.get(variant) {
+                return filter_nullable_sentinel(value);
+            }
+        }
+
         None
     }
 
@@ -153,6 +155,16 @@ impl RuleRegistry {
 
         // Try static alias resolution (O(1) perfect hash lookup)
         resolve_rule_name_alias(name).map(|s| s.to_string())
+    }
+}
+
+/// Returns `None` if the value is a nullable sentinel, otherwise returns `Some(value)`.
+/// Used by `expected_value_for` to skip type checking for Option fields with default None.
+fn filter_nullable_sentinel(value: &toml::Value) -> Option<&toml::Value> {
+    if crate::rule_config_serde::is_nullable_sentinel(value) {
+        None
+    } else {
+        Some(value)
     }
 }
 

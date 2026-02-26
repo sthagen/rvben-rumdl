@@ -400,22 +400,8 @@ impl Rule for MD072FrontmatterKeySort {
     }
 
     fn default_config_section(&self) -> Option<(String, toml::Value)> {
-        let default_config = MD072Config::default();
-        let json_value = serde_json::to_value(&default_config).ok()?;
-        let toml_value = crate::rule_config_serde::json_to_toml_value(&json_value)?;
-
-        if let toml::Value::Table(table) = toml_value {
-            if !table.is_empty() {
-                Some((MD072Config::RULE_NAME.to_string(), toml::Value::Table(table)))
-            } else {
-                // For opt-in rules, we need to explicitly declare the 'enabled' key
-                let mut table = toml::map::Map::new();
-                table.insert("enabled".to_string(), toml::Value::Boolean(false));
-                Some((MD072Config::RULE_NAME.to_string(), toml::Value::Table(table)))
-            }
-        } else {
-            None
-        }
+        let table = crate::rule_config_serde::config_schema_table(&MD072Config::default())?;
+        Some((MD072Config::RULE_NAME.to_string(), toml::Value::Table(table)))
     }
 
     fn from_config(config: &crate::config::Config) -> Box<dyn Rule>

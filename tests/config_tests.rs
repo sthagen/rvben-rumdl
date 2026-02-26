@@ -3047,3 +3047,95 @@ fn test_extend_enable_all_with_extend_disable_specific() {
     let names: HashSet<String> = filtered.iter().map(|r| r.name().to_string()).collect();
     assert!(!names.contains("MD013"));
 }
+
+// ========== Regression tests for issue #467 ==========
+// MD072's key-order (and other Option fields) should not be flagged as unknown
+
+#[test]
+fn test_md072_key_order_not_flagged_as_unknown() {
+    let temp_dir = tempdir().expect("Failed to create temporary directory");
+    let config_path = temp_dir.path().join(".rumdl.toml");
+
+    let config_content = r#"
+[MD072]
+key-order = ["description", "title"]
+"#;
+    fs::write(&config_path, config_content).expect("Failed to write config");
+
+    let sourced = SourcedConfig::load_with_discovery(Some(config_path.to_str().unwrap()), None, true)
+        .expect("Should load config");
+
+    let config: Config = sourced.into_validated_unchecked().into();
+    let rules = all_rules(&config);
+    let registry = RuleRegistry::from_rules(&rules);
+
+    // key-order should be recognized as a valid key for MD072
+    let valid_keys = registry
+        .config_keys_for("MD072")
+        .expect("MD072 should exist in registry");
+    assert!(
+        valid_keys.contains("key-order") || valid_keys.contains("key_order"),
+        "key-order/key_order should be a valid config key for MD072, got: {:?}",
+        valid_keys
+    );
+}
+
+#[test]
+fn test_md072_key_order_snake_case_not_flagged() {
+    let temp_dir = tempdir().expect("Failed to create temporary directory");
+    let config_path = temp_dir.path().join(".rumdl.toml");
+
+    let config_content = r#"
+[MD072]
+key_order = ["description", "title"]
+"#;
+    fs::write(&config_path, config_content).expect("Failed to write config");
+
+    let sourced = SourcedConfig::load_with_discovery(Some(config_path.to_str().unwrap()), None, true)
+        .expect("Should load config");
+
+    let config: Config = sourced.into_validated_unchecked().into();
+    let rules = all_rules(&config);
+    let registry = RuleRegistry::from_rules(&rules);
+
+    let valid_keys = registry
+        .config_keys_for("MD072")
+        .expect("MD072 should exist in registry");
+    assert!(
+        valid_keys.contains("key_order"),
+        "key_order should be a valid config key for MD072, got: {:?}",
+        valid_keys
+    );
+}
+
+#[test]
+fn test_md072_unknown_option_still_detected() {
+    // Genuinely unknown options should still be flagged
+    let config = Config::default();
+    let rules = all_rules(&config);
+    let registry = RuleRegistry::from_rules(&rules);
+
+    let valid_keys = registry
+        .config_keys_for("MD072")
+        .expect("MD072 should exist in registry");
+    assert!(
+        !valid_keys.contains("nonexistent-option"),
+        "nonexistent-option should NOT be a valid config key for MD072"
+    );
+}
+
+#[test]
+fn test_md072_key_order_no_type_mismatch_warning() {
+    // expected_value_for should return None for nullable keys (no type check)
+    let config = Config::default();
+    let rules = all_rules(&config);
+    let registry = RuleRegistry::from_rules(&rules);
+
+    // The sentinel should be filtered out, returning None
+    let expected = registry.expected_value_for("MD072", "key_order");
+    assert!(
+        expected.is_none(),
+        "expected_value_for should return None for nullable key_order, got: {:?}",
+        expected
+    );
+}
