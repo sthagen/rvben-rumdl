@@ -1008,11 +1008,13 @@ impl MD013LineLength {
                 #[derive(Clone)]
                 enum LineType {
                     Content(String),
-                    CodeBlock(String, usize),      // content and original indent
-                    NestedListItem(String, usize), // full line content and original indent
-                    SemanticLine(String),          // Lines starting with NOTE:, WARNING:, etc that should stay separate
-                    SnippetLine(String),           // MkDocs Snippets delimiters (-8<-) that must stay on their own line
-                    DivMarker(String),             // Quarto/Pandoc div markers (::: opening or closing)
+                    CodeBlock(String, usize),         // content and original indent
+                    NestedListItem(String, usize),    // full line content and original indent
+                    SemanticLine(String), // Lines starting with NOTE:, WARNING:, etc that should stay separate
+                    SnippetLine(String),  // MkDocs Snippets delimiters (-8<-) that must stay on their own line
+                    DivMarker(String),    // Quarto/Pandoc div markers (::: opening or closing)
+                    AdmonitionHeader(String, usize), // header text (e.g. "!!! note") and original indent
+                    AdmonitionContent(String, usize), // body content text and original indent
                     Empty,
                 }
 
@@ -1054,6 +1056,22 @@ impl MD013LineLength {
                                 line_info.content(ctx.content)[indent..].to_string(),
                                 indent,
                             ));
+                            i += 1;
+                            continue;
+                        }
+
+                        // Check for MkDocs admonition lines inside list items.
+                        // The flavor detection marks these with in_admonition, so we
+                        // can classify them as admonition header or body content.
+                        if line_info.in_admonition {
+                            let raw_content = line_info.content(ctx.content);
+                            if mkdocs_admonitions::is_admonition_start(raw_content) {
+                                let header_text = raw_content[indent..].trim_end().to_string();
+                                list_item_lines.push(LineType::AdmonitionHeader(header_text, indent));
+                            } else {
+                                let body_text = raw_content[indent..].trim_end().to_string();
+                                list_item_lines.push(LineType::AdmonitionContent(body_text, indent));
+                            }
                             i += 1;
                             continue;
                         }
@@ -1156,6 +1174,11 @@ impl MD013LineLength {
                     Html {
                         lines: Vec<String>,        // HTML content preserved exactly as-is
                         has_preceding_blank: bool, // Whether there was a blank line before this block
+                    },
+                    Admonition {
+                        header: String,                      // e.g. "!!! note" or "??? warning \"Title\""
+                        header_indent: usize,                // original indent of the header line
+                        content_lines: Vec<(String, usize)>, // (text, original_indent) pairs for body lines
                     },
                 }
 
@@ -1261,10 +1284,35 @@ impl MD013LineLength {
                 let mut code_block_has_preceding_blank = false; // Track blank before current code block
                 let mut html_block_has_preceding_blank = false; // Track blank before current HTML block
 
+                // Track admonition context for block building
+                let mut in_admonition_block = false;
+                let mut admonition_header: Option<(String, usize)> = None; // (header_text, indent)
+                let mut admonition_content: Vec<(String, usize)> = Vec::new();
+
+                // Flush any pending admonition block into `blocks`
+                let flush_admonition = |blocks: &mut Vec<Block>,
+                                        in_admonition: &mut bool,
+                                        header: &mut Option<(String, usize)>,
+                                        content: &mut Vec<(String, usize)>| {
+                    if *in_admonition {
+                        if let Some((h, hi)) = header.take() {
+                            blocks.push(Block::Admonition {
+                                header: h,
+                                header_indent: hi,
+                                content_lines: std::mem::take(content),
+                            });
+                        }
+                        *in_admonition = false;
+                    }
+                };
+
                 for line in &list_item_lines {
                     match line {
                         LineType::Empty => {
-                            if in_code {
+                            if in_admonition_block {
+                                // Blank lines inside admonitions separate paragraphs within the body
+                                admonition_content.push((String::new(), 0));
+                            } else if in_code {
                                 current_code_block.push((String::new(), 0));
                             } else if in_nested_list {
                                 current_nested_list.push((String::new(), 0));
@@ -1279,6 +1327,12 @@ impl MD013LineLength {
                             had_preceding_blank = true;
                         }
                         LineType::Content(content) => {
+                            flush_admonition(
+                                &mut blocks,
+                                &mut in_admonition_block,
+                                &mut admonition_header,
+                                &mut admonition_content,
+                            );
                             // Check if we're currently in an HTML block
                             if in_html_block {
                                 current_html_block.push(content.clone());
@@ -1365,6 +1419,12 @@ impl MD013LineLength {
                             }
                         }
                         LineType::CodeBlock(content, indent) => {
+                            flush_admonition(
+                                &mut blocks,
+                                &mut in_admonition_block,
+                                &mut admonition_header,
+                                &mut admonition_content,
+                            );
                             if in_nested_list {
                                 // Switching from nested list to code
                                 blocks.push(Block::NestedList(current_nested_list.clone()));
@@ -1394,6 +1454,12 @@ impl MD013LineLength {
                             had_preceding_blank = false; // Reset after code
                         }
                         LineType::NestedListItem(content, indent) => {
+                            flush_admonition(
+                                &mut blocks,
+                                &mut in_admonition_block,
+                                &mut admonition_header,
+                                &mut admonition_content,
+                            );
                             if in_code {
                                 // Switching from code to nested list
                                 blocks.push(Block::Code {
@@ -1425,6 +1491,12 @@ impl MD013LineLength {
                         }
                         LineType::SemanticLine(content) => {
                             // Semantic lines are standalone - flush any current block and add as separate block
+                            flush_admonition(
+                                &mut blocks,
+                                &mut in_admonition_block,
+                                &mut admonition_header,
+                                &mut admonition_content,
+                            );
                             if in_code {
                                 blocks.push(Block::Code {
                                     lines: current_code_block.clone(),
@@ -1455,6 +1527,12 @@ impl MD013LineLength {
                         LineType::SnippetLine(content) => {
                             // Snippet delimiters (-8<-) are standalone - flush any current block and add as separate block
                             // Unlike semantic lines, snippet lines don't add extra blank lines around them
+                            flush_admonition(
+                                &mut blocks,
+                                &mut in_admonition_block,
+                                &mut admonition_header,
+                                &mut admonition_content,
+                            );
                             if in_code {
                                 blocks.push(Block::Code {
                                     lines: current_code_block.clone(),
@@ -1485,6 +1563,12 @@ impl MD013LineLength {
                         LineType::DivMarker(content) => {
                             // Div markers (::: opening or closing) are standalone structural delimiters
                             // Flush any current block and add as separate block
+                            flush_admonition(
+                                &mut blocks,
+                                &mut in_admonition_block,
+                                &mut admonition_header,
+                                &mut admonition_content,
+                            );
                             if in_code {
                                 blocks.push(Block::Code {
                                     lines: current_code_block.clone(),
@@ -1511,25 +1595,80 @@ impl MD013LineLength {
                             blocks.push(Block::DivMarker(content.clone()));
                             had_preceding_blank = false;
                         }
+                        LineType::AdmonitionHeader(header_text, indent) => {
+                            flush_admonition(
+                                &mut blocks,
+                                &mut in_admonition_block,
+                                &mut admonition_header,
+                                &mut admonition_content,
+                            );
+                            // Flush other current blocks
+                            if in_code {
+                                blocks.push(Block::Code {
+                                    lines: current_code_block.clone(),
+                                    has_preceding_blank: code_block_has_preceding_blank,
+                                });
+                                current_code_block.clear();
+                                in_code = false;
+                            } else if in_nested_list {
+                                blocks.push(Block::NestedList(current_nested_list.clone()));
+                                current_nested_list.clear();
+                                in_nested_list = false;
+                            } else if in_html_block {
+                                blocks.push(Block::Html {
+                                    lines: current_html_block.clone(),
+                                    has_preceding_blank: html_block_has_preceding_blank,
+                                });
+                                current_html_block.clear();
+                                html_tag_stack.clear();
+                                in_html_block = false;
+                            } else if !current_paragraph.is_empty() {
+                                blocks.push(Block::Paragraph(current_paragraph.clone()));
+                                current_paragraph.clear();
+                            }
+                            // Start new admonition block
+                            in_admonition_block = true;
+                            admonition_header = Some((header_text.clone(), *indent));
+                            admonition_content.clear();
+                            had_preceding_blank = false;
+                        }
+                        LineType::AdmonitionContent(content, indent) => {
+                            if in_admonition_block {
+                                // Add to current admonition body
+                                admonition_content.push((content.clone(), *indent));
+                            } else {
+                                // Admonition content without a header should not happen,
+                                // but treat it as regular content to avoid data loss
+                                current_paragraph.push(content.clone());
+                            }
+                            had_preceding_blank = false;
+                        }
                     }
                 }
 
-                // Push remaining block
+                // Push all remaining pending blocks independently
+                flush_admonition(
+                    &mut blocks,
+                    &mut in_admonition_block,
+                    &mut admonition_header,
+                    &mut admonition_content,
+                );
                 if in_code && !current_code_block.is_empty() {
                     blocks.push(Block::Code {
                         lines: current_code_block,
                         has_preceding_blank: code_block_has_preceding_blank,
                     });
-                } else if in_nested_list && !current_nested_list.is_empty() {
+                }
+                if in_nested_list && !current_nested_list.is_empty() {
                     blocks.push(Block::NestedList(current_nested_list));
-                } else if in_html_block && !current_html_block.is_empty() {
-                    // If we still have an unclosed HTML block, push it anyway
-                    // (malformed HTML - missing closing tag)
+                }
+                if in_html_block && !current_html_block.is_empty() {
                     blocks.push(Block::Html {
                         lines: current_html_block,
                         has_preceding_blank: html_block_has_preceding_blank,
                     });
-                } else if !current_paragraph.is_empty() {
+                }
+                if !current_paragraph.is_empty() {
                     blocks.push(Block::Paragraph(current_paragraph));
                 }
 
@@ -1592,6 +1731,7 @@ impl MD013LineLength {
                     let has_semantic_lines = blocks.iter().any(|b| matches!(b, Block::SemanticLine(_)));
                     let has_snippet_lines = blocks.iter().any(|b| matches!(b, Block::SnippetLine(_)));
                     let has_div_markers = blocks.iter().any(|b| matches!(b, Block::DivMarker(_)));
+                    let has_admonitions = blocks.iter().any(|b| matches!(b, Block::Admonition { .. }));
                     let has_paragraphs = blocks.iter().any(|b| matches!(b, Block::Paragraph(_)));
 
                     // If we have structural blocks but no paragraphs, don't normalize
@@ -1599,7 +1739,8 @@ impl MD013LineLength {
                         || has_code_blocks
                         || has_semantic_lines
                         || has_snippet_lines
-                        || has_div_markers)
+                        || has_div_markers
+                        || has_admonitions)
                         && !has_paragraphs
                     {
                         return false;
@@ -1638,18 +1779,29 @@ impl MD013LineLength {
                     ReflowMode::Normalize => {
                         // Only reflow if:
                         // 1. Any non-exempt paragraph, when joined, exceeds the limit, OR
-                        // 2. The list item should be normalized (has multi-line plain text)
-                        let any_paragraph_exceeds = blocks.iter().any(|block| {
-                            if let Block::Paragraph(para_lines) = block {
+                        // 2. Any admonition content line exceeds the limit, OR
+                        // 3. The list item should be normalized (has multi-line plain text)
+                        let any_paragraph_exceeds = blocks.iter().any(|block| match block {
+                            Block::Paragraph(para_lines) => {
                                 if para_lines.iter().all(|line| is_exempt_line(line)) {
                                     return false;
                                 }
                                 let joined = para_lines.join(" ");
                                 let with_marker = format!("{}{}", " ".repeat(marker_len), joined.trim());
                                 self.calculate_effective_length(&with_marker) > config.line_length.get()
-                            } else {
-                                false
                             }
+                            Block::Admonition {
+                                content_lines,
+                                header_indent,
+                                ..
+                            } => content_lines.iter().any(|(content, indent)| {
+                                if content.is_empty() {
+                                    return false;
+                                }
+                                let with_indent = format!("{}{}", " ".repeat(*indent.max(header_indent)), content);
+                                self.calculate_effective_length(&with_indent) > config.line_length.get()
+                            }),
+                            _ => false,
                         });
                         if any_paragraph_exceeds {
                             true
@@ -1971,6 +2123,109 @@ impl MD013LineLength {
                                         } => *has_preceding_blank,
                                         Block::SnippetLine(_) | Block::DivMarker(_) => false,
                                         _ => true, // For all other blocks, add blank line
+                                    };
+                                    if should_add_blank && result.last().map(|s: &String| !s.is_empty()).unwrap_or(true)
+                                    {
+                                        result.push(String::new());
+                                    }
+                                }
+                            }
+                            Block::Admonition {
+                                header,
+                                header_indent,
+                                content_lines: admon_lines,
+                            } => {
+                                // Reconstruct admonition block with header at original indent
+                                // and body content reflowed to fit within the line length limit
+
+                                // Add blank line before admonition if not first block
+                                if !is_first_block && result.last().map(|s: &String| !s.is_empty()).unwrap_or(true) {
+                                    result.push(String::new());
+                                }
+
+                                // Output the header at its original indent
+                                let header_indent_str = " ".repeat(*header_indent);
+                                if is_first_block {
+                                    result.push(format!(
+                                        "{marker}{}",
+                                        " ".repeat(header_indent.saturating_sub(marker_len)) + header
+                                    ));
+                                    is_first_block = false;
+                                } else {
+                                    result.push(format!("{header_indent_str}{header}"));
+                                }
+
+                                // Derive body indent from the first non-empty content line's
+                                // stored indent, falling back to header_indent + 4 for
+                                // empty-body admonitions
+                                let body_indent = admon_lines
+                                    .iter()
+                                    .find(|(content, _)| !content.is_empty())
+                                    .map(|(_, indent)| *indent)
+                                    .unwrap_or(header_indent + 4);
+                                let body_indent_str = " ".repeat(body_indent);
+
+                                // Collect body content into paragraphs separated by blank lines
+                                let mut body_paragraphs: Vec<Vec<String>> = Vec::new();
+                                let mut current_para: Vec<String> = Vec::new();
+
+                                for (content, _orig_indent) in admon_lines {
+                                    if content.is_empty() {
+                                        if !current_para.is_empty() {
+                                            body_paragraphs.push(current_para.clone());
+                                            current_para.clear();
+                                        }
+                                    } else {
+                                        current_para.push(content.clone());
+                                    }
+                                }
+                                if !current_para.is_empty() {
+                                    body_paragraphs.push(current_para);
+                                }
+
+                                // Reflow each paragraph in the body
+                                for paragraph in &body_paragraphs {
+                                    // Add blank line before each paragraph (including the first, after the header)
+                                    result.push(String::new());
+
+                                    let paragraph_text = paragraph.join(" ").trim().to_string();
+                                    if paragraph_text.is_empty() {
+                                        continue;
+                                    }
+
+                                    // Reflow with adjusted line length
+                                    let admon_reflow_length = if config.line_length.is_unlimited() {
+                                        usize::MAX
+                                    } else {
+                                        config.line_length.get().saturating_sub(body_indent).max(1)
+                                    };
+
+                                    let admon_reflow_options = crate::utils::text_reflow::ReflowOptions {
+                                        line_length: admon_reflow_length,
+                                        break_on_sentences: true,
+                                        preserve_breaks: false,
+                                        sentence_per_line: config.reflow_mode == ReflowMode::SentencePerLine,
+                                        semantic_line_breaks: config.reflow_mode == ReflowMode::SemanticLineBreaks,
+                                        abbreviations: config.abbreviations_for_reflow(),
+                                        length_mode: self.reflow_length_mode(),
+                                    };
+
+                                    let reflowed =
+                                        crate::utils::text_reflow::reflow_line(&paragraph_text, &admon_reflow_options);
+                                    for line in &reflowed {
+                                        result.push(format!("{body_indent_str}{line}"));
+                                    }
+                                }
+
+                                // Add blank line after admonition if there's a next block
+                                if block_idx < blocks.len() - 1 {
+                                    let next_block = &blocks[block_idx + 1];
+                                    let should_add_blank = match next_block {
+                                        Block::Code {
+                                            has_preceding_blank, ..
+                                        } => *has_preceding_blank,
+                                        Block::SnippetLine(_) | Block::DivMarker(_) => false,
+                                        _ => true,
                                     };
                                     if should_add_blank && result.last().map(|s: &String| !s.is_empty()).unwrap_or(true)
                                     {

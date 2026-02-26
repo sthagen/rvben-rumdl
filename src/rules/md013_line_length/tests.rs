@@ -4027,3 +4027,757 @@ mod reflow_link_exemption_tests {
         );
     }
 }
+
+// ─── Issue #469: MkDocs admonitions inside list items ───
+
+#[test]
+fn test_reflow_admonition_in_list_item_basic() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a reflow fix");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    // Header must preserve its 4-space indent
+    assert!(
+        replacement.contains("    !!! note"),
+        "Admonition header should keep 4-space indent; got:\n{replacement}"
+    );
+
+    // Body must be reflowed at 8-space indent and wrapped
+    assert!(
+        replacement.contains("        Ut enim ad minim veniam"),
+        "Admonition body should have 8-space indent; got:\n{replacement}"
+    );
+
+    // Body should be wrapped (not a single long line)
+    let body_lines: Vec<&str> = replacement
+        .lines()
+        .filter(|l| l.starts_with("        ") && !l.trim().starts_with("!!!"))
+        .collect();
+    assert!(
+        body_lines.len() > 1,
+        "Admonition body should be wrapped into multiple lines; got:\n{replacement}"
+    );
+}
+
+#[test]
+fn test_reflow_collapsible_admonition_in_list_item() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    ??? warning \"Custom Title\"\n",
+        "\n",
+        "        Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a reflow fix");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    assert!(
+        replacement.contains("    ??? warning \"Custom Title\""),
+        "Collapsible admonition header should keep indent; got:\n{replacement}"
+    );
+
+    let body_lines: Vec<&str> = replacement
+        .lines()
+        .filter(|l| l.starts_with("        ") && !l.trim().starts_with("???"))
+        .collect();
+    assert!(
+        body_lines.len() > 1,
+        "Collapsible admonition body should be wrapped; got:\n{replacement}"
+    );
+}
+
+#[test]
+fn test_reflow_multiple_admonitions_in_list_item() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        First admonition body that is long enough to exceed the eighty character line length limit for testing purposes.\n",
+        "\n",
+        "    !!! warning\n",
+        "\n",
+        "        Second admonition body that is also long enough to exceed the eighty character line length limit for testing here.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a reflow fix");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    assert!(
+        replacement.contains("    !!! note"),
+        "First admonition header should be present; got:\n{replacement}"
+    );
+    assert!(
+        replacement.contains("    !!! warning"),
+        "Second admonition header should be present; got:\n{replacement}"
+    );
+
+    let note_idx = replacement.find("    !!! note").unwrap();
+    let warning_idx = replacement.find("    !!! warning").unwrap();
+    let first_body = &replacement[note_idx..warning_idx];
+    let second_body = &replacement[warning_idx..];
+
+    let first_body_lines: Vec<&str> = first_body
+        .lines()
+        .filter(|l| l.starts_with("        ") && !l.trim().is_empty())
+        .collect();
+    let second_body_lines: Vec<&str> = second_body
+        .lines()
+        .filter(|l| l.starts_with("        ") && !l.trim().is_empty())
+        .collect();
+
+    assert!(
+        first_body_lines.len() > 1,
+        "First admonition body should be wrapped; got:\n{first_body}"
+    );
+    assert!(
+        second_body_lines.len() > 1,
+        "Second admonition body should be wrapped; got:\n{second_body}"
+    );
+}
+
+#[test]
+fn test_reflow_admonition_short_content_preserved() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        Short content.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a fix for the long list item text");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    assert!(
+        replacement.contains("        Short content."),
+        "Short admonition body should be preserved; got:\n{replacement}"
+    );
+}
+
+#[test]
+fn test_reflow_admonition_with_multiple_paragraphs() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        First paragraph that is long enough to exceed the eighty character line length limit for testing purposes here.\n",
+        "\n",
+        "        Second paragraph that is also long enough to exceed the eighty character line length limit for proper verification.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a fix");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    assert!(
+        replacement.contains("        First paragraph"),
+        "First paragraph should be present; got:\n{replacement}"
+    );
+    assert!(
+        replacement.contains("        Second paragraph"),
+        "Second paragraph should be present; got:\n{replacement}"
+    );
+
+    // Check that paragraphs are separated by a blank line
+    let lines: Vec<&str> = replacement.lines().collect();
+    let blank_after_first = lines.iter().enumerate().any(|(i, line)| {
+        line.contains("First paragraph") && {
+            let mut j = i + 1;
+            while j < lines.len() && lines[j].starts_with("        ") && !lines[j].trim().is_empty() {
+                j += 1;
+            }
+            j < lines.len() && lines[j].trim().is_empty()
+        }
+    });
+    assert!(
+        blank_after_first,
+        "Paragraphs in admonition body should be separated by blank lines; got:\n{replacement}"
+    );
+}
+
+#[test]
+fn test_reflow_admonition_not_in_standard_flavor() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.\n",
+    );
+
+    // In Standard flavor, in_admonition is not set, so admonition syntax
+    // is treated as regular content or code blocks
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should still have a fix in standard mode");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    assert!(
+        !replacement.is_empty(),
+        "Should produce non-empty replacement in standard flavor"
+    );
+}
+
+#[test]
+fn test_reflow_admonition_idempotent() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.\n",
+    );
+
+    // First pass
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "First pass should have a fix");
+
+    // Apply the fix
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let mut fixed_content = content.to_string();
+    fixed_content.replace_range(fix.range.clone(), &fix.replacement);
+
+    // Second pass on the fixed content
+    let ctx2 = LintContext::new(&fixed_content, MarkdownFlavor::MkDocs, None);
+    let result2 = rule.check(&ctx2).unwrap();
+    let fixes2: Vec<_> = result2.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(
+        fixes2.is_empty(),
+        "Second pass should produce no fixes (idempotent); fixed content:\n{fixed_content}"
+    );
+}
+
+#[test]
+fn test_reflow_admonition_only_in_list_no_long_text() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Short list item text.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // The admonition body line (with its 8-space indent) exceeds 80 chars,
+    // which should trigger a reflow warning for the list item
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a fix for the long admonition body line");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    assert!(
+        replacement.contains("    !!! note"),
+        "Header should be preserved; got:\n{replacement}"
+    );
+
+    let body_lines: Vec<&str> = replacement
+        .lines()
+        .filter(|l| l.starts_with("        ") && !l.trim().is_empty())
+        .collect();
+    assert!(body_lines.len() > 1, "Body should be wrapped; got:\n{replacement}");
+}
+
+#[test]
+fn test_reflow_content_after_admonition_in_list_item() {
+    // Content following an admonition in the same list item must be preserved.
+    // Previously, the admonition block was not flushed when transitioning to
+    // regular content, causing the trailing paragraph to be silently dropped.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Short item.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        Body of the admonition that is long enough to need wrapping for testing purposes here in the body.\n",
+        "\n",
+        "    This paragraph after the admonition should be preserved and not silently dropped.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a reflow fix");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    // The admonition header must be present
+    assert!(
+        replacement.contains("    !!! note"),
+        "Admonition header should be preserved; got:\n{replacement}"
+    );
+
+    // The admonition body must be present (reflowed)
+    assert!(
+        replacement.contains("        Body of the admonition"),
+        "Admonition body should be preserved; got:\n{replacement}"
+    );
+
+    // The trailing paragraph must be present (not dropped)
+    assert!(
+        replacement.contains("This paragraph after the admonition should be preserved"),
+        "Trailing paragraph after admonition must not be dropped; got:\n{replacement}"
+    );
+}
+
+#[test]
+fn test_reflow_content_after_admonition_short_lines() {
+    // When all lines are short enough, no reflow is needed, but content must
+    // still not be dropped if a fix IS generated for other reasons.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    // All lines are short - no reflow needed
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Short item.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        Short body.\n",
+        "\n",
+        "    Trailing paragraph.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+
+    // No lines exceed 80 chars, so no warnings expected
+    let long_line_warnings: Vec<_> = result.iter().filter(|w| w.message.contains("Line length")).collect();
+    assert!(
+        long_line_warnings.is_empty(),
+        "Short lines should not trigger warnings; got: {long_line_warnings:?}"
+    );
+}
+
+#[test]
+fn test_reflow_multiple_blocks_after_admonition() {
+    // Verify that admonition followed by another block type (e.g., code) is handled
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.\n",
+        "\n",
+        "    After the admonition, this paragraph text should still be present in the reflowed output and not silently removed.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a reflow fix");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    // Both the admonition and the trailing paragraph must be present
+    assert!(
+        replacement.contains("    !!! note"),
+        "Admonition header should be preserved; got:\n{replacement}"
+    );
+    assert!(
+        replacement.contains("After the admonition"),
+        "Trailing paragraph must be preserved; got:\n{replacement}"
+    );
+}
+
+#[test]
+fn test_reflow_admonition_empty_body() {
+    // An admonition with only a header and no body content should be preserved
+    // without crashing or producing invalid output.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    !!! note\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a reflow fix for the long line");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    // The admonition header must be preserved
+    assert!(
+        replacement.contains("!!! note"),
+        "Empty-body admonition header should be preserved; got:\n{replacement}"
+    );
+}
+
+#[test]
+fn test_reflow_admonition_no_blank_line_before_body() {
+    // MkDocs supports admonitions without a blank line between the header and body:
+    //   !!! note
+    //       content here
+    // The parser should handle this correctly.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore.\n",
+        "\n",
+        "    !!! note\n",
+        "        Body content immediately following the admonition header without a blank line separator between them.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a reflow fix");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    // Both header and body must be present
+    assert!(
+        replacement.contains("!!! note"),
+        "Admonition header should be preserved; got:\n{replacement}"
+    );
+    assert!(
+        replacement.contains("Body content immediately"),
+        "Admonition body should be preserved; got:\n{replacement}"
+    );
+}
+
+#[test]
+fn test_reflow_admonition_body_indent_preserved() {
+    // Verify that the body indent is derived from actual content lines, not
+    // hardcoded as header_indent + 4. This matters for nested admonitions
+    // or non-standard indent widths.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    // Standard 4-indent body: header at col 4, body at col 8
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Short item.\n",
+        "\n",
+        "    !!! note\n",
+        "\n",
+        "        This body line at indent 8 is long enough to exceed the eighty character column limit for testing purposes here.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a reflow fix");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    // All body lines should start with exactly 8 spaces (not more, not less)
+    for line in replacement.lines() {
+        if !line.is_empty() && !line.contains("!!!") && !line.starts_with("- ") && !line.starts_with("  ") {
+            continue;
+        }
+        // Check actual body lines (indented content under the admonition)
+        if line.starts_with("        ") && !line.trim().is_empty() && !line.contains("!!!") {
+            assert!(
+                line.starts_with("        ") && !line.starts_with("         "),
+                "Body lines should have exactly 8 spaces of indent; got: '{line}'"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_reflow_tab_container_in_list_item() {
+    // MkDocs tab containers (=== "Tab Title") inside list items should not
+    // cause crashes or data loss. They are treated as regular content since
+    // tab containers in list items are an unusual edge case.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(80),
+        paragraphs: true,
+        code_blocks: true,
+        tables: true,
+        headings: true,
+        strict: false,
+        reflow: true,
+        reflow_mode: ReflowMode::Default,
+        length_mode: LengthMode::default(),
+        abbreviations: Vec::new(),
+    };
+    let rule = MD013LineLength::from_config_struct(config);
+
+    let content = concat!(
+        "# Test\n",
+        "\n",
+        "- Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        "\n",
+        "    === \"Tab One\"\n",
+        "\n",
+        "        Tab content here.\n",
+    );
+
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let result = rule.check(&ctx).unwrap();
+    // The long list item line should trigger a warning; the tab container should not crash
+    let fixes: Vec<_> = result.iter().filter(|w| w.fix.is_some()).collect();
+    assert!(!fixes.is_empty(), "Should have a reflow fix for the long line");
+
+    let fix = fixes[0].fix.as_ref().unwrap();
+    let replacement = &fix.replacement;
+
+    // The tab container should appear in the output (preserved as-is)
+    assert!(
+        replacement.contains("=== \"Tab One\"") || replacement.contains("Tab content here"),
+        "Tab container content should not be silently dropped; got:\n{replacement}"
+    );
+}
