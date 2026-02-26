@@ -4499,10 +4499,13 @@ fn make_embedded_markdown_config() -> crate::code_block_tools::CodeBlockToolsCon
         format: Vec::new(),
         on_error: None,
     };
-    let mut config = crate::code_block_tools::CodeBlockToolsConfig::default();
-    config.enabled = true;
-    config.languages.insert("markdown".to_string(), lang);
-    config
+    let mut languages = std::collections::HashMap::new();
+    languages.insert("markdown".to_string(), lang);
+    crate::code_block_tools::CodeBlockToolsConfig {
+        enabled: true,
+        languages,
+        ..Default::default()
+    }
 }
 
 #[tokio::test]
@@ -4626,9 +4629,8 @@ async fn test_lint_document_embedded_markdown_md_alias() {
     // Enable for "md" alias instead of "markdown"
     {
         let mut cfg = server.rumdl_config.write().await;
-        let mut cbt = crate::code_block_tools::CodeBlockToolsConfig::default();
-        cbt.enabled = true;
-        cbt.languages.insert(
+        let mut languages = std::collections::HashMap::new();
+        languages.insert(
             "md".to_string(),
             crate::code_block_tools::LanguageToolConfig {
                 enabled: true,
@@ -4637,7 +4639,11 @@ async fn test_lint_document_embedded_markdown_md_alias() {
                 on_error: None,
             },
         );
-        cfg.code_block_tools = cbt;
+        cfg.code_block_tools = crate::code_block_tools::CodeBlockToolsConfig {
+            enabled: true,
+            languages,
+            ..Default::default()
+        };
     }
 
     let uri = Url::parse("file:///test.md").unwrap();

@@ -305,8 +305,7 @@ fn test_html_comments_backtick_code_skipped() {
     assert_eq!(
         result.len(),
         1,
-        "Should only flag 'javascript' in non-backtick HTML comment, got: {:?}",
-        result
+        "Should only flag 'javascript' in non-backtick HTML comment, got: {result:?}",
     );
     assert_eq!(result[0].line, 3);
 }

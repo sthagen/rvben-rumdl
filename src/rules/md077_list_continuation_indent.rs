@@ -172,15 +172,13 @@ impl Rule for MD077ListContinuationIndent {
 
                     let message = if strict_indent {
                         format!(
-                            "Content inside list item needs {} spaces of indentation \
-                             for MkDocs compatibility (found {})",
-                            required, actual,
+                            "Content inside list item needs {required} spaces of indentation \
+                             for MkDocs compatibility (found {actual})",
                         )
                     } else {
                         format!(
-                            "Content after blank line in list item needs {} spaces of \
-                             indentation to remain part of the list (found {})",
-                            required, actual,
+                            "Content after blank line in list item needs {required} spaces of \
+                             indentation to remain part of the list (found {actual})",
                         )
                     };
 
