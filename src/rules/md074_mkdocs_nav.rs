@@ -473,10 +473,10 @@ impl Rule for MD074MkDocsNav {
 
         // Check if we've already validated this exact version of mkdocs.yml
         if let Ok(mut cache) = VALIDATED_PROJECTS.lock() {
-            if let Some(&cached_hash) = cache.get(&mkdocs_path) {
-                if cached_hash == content_hash {
-                    return Ok(Vec::new());
-                }
+            if let Some(&cached_hash) = cache.get(&mkdocs_path)
+                && cached_hash == content_hash
+            {
+                return Ok(Vec::new());
             }
             cache.insert(mkdocs_path.clone(), content_hash);
         }

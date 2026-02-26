@@ -113,10 +113,9 @@ impl RuleRegistry {
         // Check if this key is an alias
         if let Some(aliases) = self.rule_aliases.get(rule)
             && let Some(canonical_key) = aliases.get(key)
+            && let Some(value) = schema.get(canonical_key)
         {
-            if let Some(value) = schema.get(canonical_key) {
-                return filter_nullable_sentinel(value);
-            }
+            return filter_nullable_sentinel(value);
         }
 
         // Try the original key

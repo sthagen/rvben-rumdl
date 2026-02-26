@@ -130,7 +130,7 @@ impl MD025SingleTitle {
             starts_with_indicator ||
             lower_text.starts_with(&format!("{indicator}:")) ||
             // Whole-word match anywhere in the heading
-            words.iter().any(|&word| word == indicator) ||
+            words.contains(&indicator) ||
             // Handle multi-word indicators appearing as a contiguous subsequence
             (indicator_words.len() > 1 && words.windows(indicator_words.len()).any(|w| w == indicator_words.as_slice())) ||
             // Handle appendix numbering like "Appendix A", "Appendix 1"

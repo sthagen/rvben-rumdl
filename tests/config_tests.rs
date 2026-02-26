@@ -3075,8 +3075,7 @@ key-order = ["description", "title"]
         .expect("MD072 should exist in registry");
     assert!(
         valid_keys.contains("key-order") || valid_keys.contains("key_order"),
-        "key-order/key_order should be a valid config key for MD072, got: {:?}",
-        valid_keys
+        "key-order/key_order should be a valid config key for MD072, got: {valid_keys:?}",
     );
 }
 
@@ -3103,8 +3102,7 @@ key_order = ["description", "title"]
         .expect("MD072 should exist in registry");
     assert!(
         valid_keys.contains("key_order"),
-        "key_order should be a valid config key for MD072, got: {:?}",
-        valid_keys
+        "key_order should be a valid config key for MD072, got: {valid_keys:?}",
     );
 }
 
@@ -3135,7 +3133,6 @@ fn test_md072_key_order_no_type_mismatch_warning() {
     let expected = registry.expected_value_for("MD072", "key_order");
     assert!(
         expected.is_none(),
-        "expected_value_for should return None for nullable key_order, got: {:?}",
-        expected
+        "expected_value_for should return None for nullable key_order, got: {expected:?}",
     );
 }
