@@ -19,9 +19,6 @@ static REF_REGEX: LazyLock<Regex> =
 // Pattern for list items to exclude from reference checks (standard regex is fine)
 static LIST_ITEM_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*[-*+]\s+(?:\[[xX\s]\]\s+)?").unwrap());
 
-// Pattern for code blocks (standard regex is fine)
-static FENCED_CODE_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\s*)(`{3,}|~{3,})").unwrap());
-
 // Pattern for output example sections (standard regex is fine)
 static OUTPUT_EXAMPLE_START: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^#+\s*(?:Output|Example|Output Style|Output Format)\s*$").unwrap());
@@ -283,52 +280,21 @@ impl MD052ReferenceLinkImages {
         false
     }
 
-    fn extract_references(&self, content: &str, mkdocs_mode: bool) -> HashSet<String> {
-        use crate::config::MarkdownFlavor;
+    fn extract_references(&self, ctx: &crate::lint_context::LintContext) -> HashSet<String> {
         use crate::utils::skip_context::is_mkdocs_snippet_line;
 
         let mut references = HashSet::new();
-        let mut in_code_block = false;
-        let mut code_fence_marker = String::new();
 
-        for line in content.lines() {
+        for (line_num, line) in ctx.content.lines().enumerate() {
+            // Use LintContext's pre-computed code block info (1-indexed)
+            if let Some(line_info) = ctx.line_info(line_num + 1)
+                && line_info.in_code_block
+            {
+                continue;
+            }
+
             // Skip lines that look like MkDocs snippet markers (only in MkDocs mode)
-            if is_mkdocs_snippet_line(
-                line,
-                if mkdocs_mode {
-                    MarkdownFlavor::MkDocs
-                } else {
-                    MarkdownFlavor::Standard
-                },
-            ) {
-                continue;
-            }
-            // Handle code block boundaries
-            if let Some(cap) = FENCED_CODE_START.captures(line) {
-                if let Some(fence) = cap.get(2) {
-                    // Get the fence marker (``` or ~~~) without the indentation
-                    let fence_str = fence.as_str();
-                    if !in_code_block {
-                        in_code_block = true;
-                        code_fence_marker = fence_str.to_string();
-                    } else if line.trim_start().starts_with(&code_fence_marker) {
-                        // Check if this could be a closing fence
-                        let trimmed = line.trim_start();
-                        // A closing fence should be just the fence characters, possibly with trailing whitespace
-                        if trimmed.starts_with(&code_fence_marker) {
-                            let after_fence = &trimmed[code_fence_marker.len()..];
-                            if after_fence.trim().is_empty() {
-                                in_code_block = false;
-                                code_fence_marker.clear();
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // Skip lines in code blocks
-            if in_code_block {
+            if is_mkdocs_snippet_line(line, ctx.flavor) {
                 continue;
             }
 
@@ -357,8 +323,6 @@ impl MD052ReferenceLinkImages {
     ) -> Vec<(usize, usize, usize, String)> {
         let mut undefined = Vec::new();
         let mut reported_refs = HashMap::new();
-        let mut in_code_block = false;
-        let mut code_fence_marker = String::new();
         let mut in_example_section = false;
 
         // Get code spans once for the entire function
@@ -595,36 +559,10 @@ impl MD052ReferenceLinkImages {
         in_example_section = false; // Reset for line-by-line processing
 
         for (line_num, line) in lines.iter().enumerate() {
-            // Skip lines in frontmatter (convert 0-based to 1-based for line_info)
-            if ctx.line_info(line_num + 1).is_some_and(|info| info.in_front_matter) {
-                continue;
-            }
-
-            // Handle code blocks
-            if let Some(cap) = FENCED_CODE_START.captures(line) {
-                if let Some(fence) = cap.get(2) {
-                    // Get the fence marker (``` or ~~~) without the indentation
-                    let fence_str = fence.as_str();
-                    if !in_code_block {
-                        in_code_block = true;
-                        code_fence_marker = fence_str.to_string();
-                    } else if line.trim_start().starts_with(&code_fence_marker) {
-                        // Check if this could be a closing fence
-                        let trimmed = line.trim_start();
-                        // A closing fence should be just the fence characters, possibly with trailing whitespace
-                        if trimmed.starts_with(&code_fence_marker) {
-                            let after_fence = &trimmed[code_fence_marker.len()..];
-                            if after_fence.trim().is_empty() {
-                                in_code_block = false;
-                                code_fence_marker.clear();
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-
-            if in_code_block {
+            // Skip lines in frontmatter or code blocks using LintContext's pre-computed info
+            if let Some(line_info) = ctx.line_info(line_num + 1)
+                && (line_info.in_front_matter || line_info.in_code_block)
+            {
                 continue;
             }
 
@@ -921,7 +859,7 @@ impl Rule for MD052ReferenceLinkImages {
         // Check if we're in MkDocs mode from the context
         let mkdocs_mode = ctx.flavor == crate::config::MarkdownFlavor::MkDocs;
 
-        let references = self.extract_references(content, mkdocs_mode);
+        let references = self.extract_references(ctx);
 
         // Use optimized detection method with cached link/image data
         let lines = ctx.raw_lines();
@@ -1293,7 +1231,8 @@ Want to fill out this form?
     fn test_extract_references() {
         let rule = MD052ReferenceLinkImages::new();
         let content = "[ref1]: url1\n[Ref2]: url2\n[REF3]: url3";
-        let refs = rule.extract_references(content, false);
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let refs = rule.extract_references(&ctx);
 
         assert_eq!(refs.len(), 3);
         assert!(refs.contains("ref1"));
@@ -1790,5 +1729,28 @@ See [other docs][MissingRef] for more.
         // [Box] should be flagged (not in ignore)
         assert_eq!(result.len(), 1);
         assert!(result[0].message.contains("Box"));
+    }
+
+    #[test]
+    fn test_nested_code_fences_reference_extraction() {
+        // Verify that extract_references uses LintContext's pre-computed in_code_block
+        // so nested fences are handled correctly.
+        // A 4-backtick fence wrapping a 3-backtick fence should treat the inner
+        // ``` as content, not a code block boundary.
+        let rule = MD052ReferenceLinkImages::new();
+
+        let content = "````\n```\n[ref-inside]: https://example.com\n```\n````\n\n[Use this link][ref-inside]";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        // The reference definition is inside a code block (the outer ````),
+        // so it should NOT be recognized as a definition.
+        // Therefore [ref-inside] should be flagged as undefined.
+        assert_eq!(
+            result.len(),
+            1,
+            "Reference defined inside nested code fence should not count as a definition"
+        );
+        assert!(result[0].message.contains("ref-inside"));
     }
 }

@@ -4,12 +4,9 @@ use crate::rule_config_serde::RuleConfig;
 ///
 /// See [docs/md010.md](../../docs/md010.md) for full documentation, configuration, and examples.
 use crate::utils::range_utils::calculate_match_range;
-use crate::utils::regex_cache::{HTML_COMMENT_END, HTML_COMMENT_START};
 
 mod md010_config;
 use md010_config::MD010Config;
-
-// HTML comment patterns are now imported from regex_cache
 
 /// Rule MD010: Hard tabs
 #[derive(Clone, Default)]
@@ -30,35 +27,50 @@ impl MD010NoHardTabs {
         Self { config }
     }
 
-    // Identify lines that are part of HTML comments
-    fn find_html_comment_lines(lines: &[&str]) -> Vec<bool> {
-        let mut in_html_comment = false;
-        let mut html_comment_lines = vec![false; lines.len()];
+    /// Detect which lines are inside fenced code blocks (``` or ~~~).
+    /// Only fenced code blocks are skipped — indented code blocks (4+ spaces / tab)
+    /// are NOT skipped because the tabs themselves are what MD010 should flag.
+    fn find_fenced_code_block_lines(lines: &[&str]) -> Vec<bool> {
+        let mut in_fenced_block = false;
+        let mut fence_char: Option<char> = None;
+        let mut fence_len: usize = 0;
+        let mut result = vec![false; lines.len()];
 
         for (i, line) in lines.iter().enumerate() {
-            // Check if this line has a comment start
-            let has_comment_start = HTML_COMMENT_START.is_match(line);
-            // Check if this line has a comment end
-            let has_comment_end = HTML_COMMENT_END.is_match(line);
+            let trimmed = line.trim_start();
 
-            if has_comment_start && !has_comment_end && !in_html_comment {
-                // Comment starts on this line and doesn't end
-                in_html_comment = true;
-                html_comment_lines[i] = true;
-            } else if has_comment_end && in_html_comment {
-                // Comment ends on this line
-                html_comment_lines[i] = true;
-                in_html_comment = false;
-            } else if has_comment_start && has_comment_end {
-                // Both start and end on the same line
-                html_comment_lines[i] = true;
-            } else if in_html_comment {
-                // We're inside a multi-line comment
-                html_comment_lines[i] = true;
+            if !in_fenced_block {
+                // Check for opening fence (3+ backticks or tildes)
+                let first_char = trimmed.chars().next();
+                if matches!(first_char, Some('`') | Some('~')) {
+                    let fc = first_char.unwrap();
+                    let count = trimmed.chars().take_while(|&c| c == fc).count();
+                    if count >= 3 {
+                        in_fenced_block = true;
+                        fence_char = Some(fc);
+                        fence_len = count;
+                        result[i] = true;
+                    }
+                }
+            } else {
+                result[i] = true;
+                // Check for closing fence (must match opening fence char and be >= opening length)
+                if let Some(fc) = fence_char {
+                    let first = trimmed.chars().next();
+                    if first == Some(fc) {
+                        let count = trimmed.chars().take_while(|&c| c == fc).count();
+                        // Closing fence must be at least as long as opening, with nothing else on the line
+                        if count >= fence_len && trimmed[count..].trim().is_empty() {
+                            in_fenced_block = false;
+                            fence_char = None;
+                            fence_len = 0;
+                        }
+                    }
+                }
             }
         }
 
-        html_comment_lines
+        result
     }
 
     fn count_leading_tabs(line: &str) -> usize {
@@ -106,39 +118,6 @@ impl MD010NoHardTabs {
 
         groups
     }
-
-    /// Find lines that are inside fenced code blocks (``` or ~~~)
-    /// Returns a Vec<bool> where index i indicates if line i is inside a fenced code block
-    fn find_fenced_code_block_lines(lines: &[&str]) -> Vec<bool> {
-        let mut in_fenced_block = false;
-        let mut fence_char: Option<char> = None;
-        let mut result = vec![false; lines.len()];
-
-        for (i, line) in lines.iter().enumerate() {
-            let trimmed = line.trim_start();
-
-            if !in_fenced_block {
-                // Check for opening fence (``` or ~~~)
-                if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                    in_fenced_block = true;
-                    fence_char = Some(trimmed.chars().next().unwrap());
-                    result[i] = true; // Mark the fence line itself as "in fenced block"
-                }
-            } else {
-                result[i] = true;
-                // Check for closing fence (must match opening fence char)
-                if let Some(fc) = fence_char {
-                    let fence_str: String = std::iter::repeat_n(fc, 3).collect();
-                    if trimmed.starts_with(&fence_str) && trimmed.trim() == fence_str {
-                        in_fenced_block = false;
-                        fence_char = None;
-                    }
-                }
-            }
-        }
-
-        result
-    }
 }
 
 impl Rule for MD010NoHardTabs {
@@ -156,28 +135,24 @@ impl Rule for MD010NoHardTabs {
         let mut warnings = Vec::new();
         let lines = ctx.raw_lines();
 
-        // Pre-compute which lines are part of HTML comments
-        let html_comment_lines = Self::find_html_comment_lines(lines);
-
-        // Pre-compute which lines are inside fenced code blocks (``` or ~~~)
-        // We only skip fenced code blocks - code has its own formatting rules
-        // (e.g., Makefiles require tabs, Go uses tabs by convention)
-        // We still flag tab-indented content because it might be accidental
-        let fenced_code_block_lines = Self::find_fenced_code_block_lines(lines);
+        // Track fenced code blocks separately — we skip FENCED blocks but NOT
+        // indented code blocks (since tab indentation IS what MD010 should flag)
+        let fenced_lines = Self::find_fenced_code_block_lines(lines);
 
         for (line_num, &line) in lines.iter().enumerate() {
-            // Skip if in HTML comment
-            if html_comment_lines[line_num] {
+            // Skip fenced code blocks (code has its own formatting rules)
+            if fenced_lines[line_num] {
                 continue;
             }
 
-            // Skip if in fenced code block - code has its own formatting rules
-            if fenced_code_block_lines[line_num] {
-                continue;
-            }
-
-            // Skip lines inside PyMdown blocks
-            if ctx.line_info(line_num + 1).is_some_and(|info| info.in_pymdown_block) {
+            // Skip HTML comments, HTML blocks, PyMdown blocks, mkdocstrings, ESM blocks
+            if ctx.line_info(line_num + 1).is_some_and(|info| {
+                info.in_html_comment
+                    || info.in_html_block
+                    || info.in_pymdown_block
+                    || info.in_mkdocstrings
+                    || info.in_esm_block
+            }) {
                 continue;
             }
 
@@ -248,24 +223,24 @@ impl Rule for MD010NoHardTabs {
         let mut result = String::new();
         let lines = ctx.raw_lines();
 
-        // Pre-compute which lines are part of HTML comments
-        let html_comment_lines = Self::find_html_comment_lines(lines);
-
-        // Pre-compute which lines are inside fenced code blocks
-        // Only skip fenced code blocks - code has its own formatting rules
-        // (e.g., Makefiles require tabs, Go uses tabs by convention)
-        let fenced_code_block_lines = Self::find_fenced_code_block_lines(lines);
+        // Track fenced code blocks separately — preserve tabs in FENCED blocks
+        let fenced_lines = Self::find_fenced_code_block_lines(lines);
 
         for (i, line) in lines.iter().enumerate() {
-            if html_comment_lines[i] {
-                // Preserve HTML comments as they are
-                result.push_str(line);
-            } else if fenced_code_block_lines[i] {
-                // Preserve fenced code blocks as-is - code has its own formatting rules
+            // Preserve fenced code blocks and other non-markdown contexts
+            let should_skip = fenced_lines[i]
+                || ctx.line_info(i + 1).is_some_and(|info| {
+                    info.in_html_comment
+                        || info.in_html_block
+                        || info.in_pymdown_block
+                        || info.in_mkdocstrings
+                        || info.in_esm_block
+                });
+
+            if should_skip {
                 result.push_str(line);
             } else {
                 // Replace tabs with spaces in regular markdown content
-                // (including tab-indented content which might be accidental)
                 result.push_str(&line.replace('\t', &" ".repeat(self.config.spaces_per_tab.get())));
             }
 
@@ -563,13 +538,95 @@ mod tests {
     }
 
     #[test]
-    fn test_find_html_comment_lines() {
-        let lines = vec!["Normal", "<!-- Start", "Middle", "End -->", "After"];
-        let result = MD010NoHardTabs::find_html_comment_lines(&lines);
-        assert_eq!(result, vec![false, true, true, true, false]);
+    fn test_tilde_fence_longer_than_3() {
+        let rule = MD010NoHardTabs::default();
+        // 5-tilde fenced code block should be recognized and tabs inside should be skipped
+        let content = "~~~~~\ncode\twith\ttab\n~~~~~\ntext\twith\ttab";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        // Only tabs on line 4 (outside the code block) should be flagged
+        assert_eq!(
+            result.len(),
+            2,
+            "Expected 2 warnings but got {}: {:?}",
+            result.len(),
+            result
+        );
+        assert_eq!(result[0].line, 4);
+        assert_eq!(result[1].line, 4);
+    }
 
-        let lines = vec!["<!-- Single line comment -->", "Normal"];
-        let result = MD010NoHardTabs::find_html_comment_lines(&lines);
-        assert_eq!(result, vec![true, false]);
+    #[test]
+    fn test_backtick_fence_longer_than_3() {
+        let rule = MD010NoHardTabs::default();
+        // 5-backtick fenced code block
+        let content = "`````\ncode\twith\ttab\n`````\ntext\twith\ttab";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.len(),
+            2,
+            "Expected 2 warnings but got {}: {:?}",
+            result.len(),
+            result
+        );
+        assert_eq!(result[0].line, 4);
+        assert_eq!(result[1].line, 4);
+    }
+
+    #[test]
+    fn test_indented_code_block_tabs_flagged() {
+        let rule = MD010NoHardTabs::default();
+        // Tabs in indented code blocks are flagged because the tab IS the problem
+        // (unlike fenced code blocks where tabs are part of the code formatting)
+        let content = "    code\twith\ttab\n\nNormal\ttext";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.len(),
+            3,
+            "Expected 3 warnings but got {}: {:?}",
+            result.len(),
+            result
+        );
+        assert_eq!(result[0].line, 1);
+        assert_eq!(result[1].line, 1);
+        assert_eq!(result[2].line, 3);
+    }
+
+    #[test]
+    fn test_html_comment_end_then_start_same_line() {
+        let rule = MD010NoHardTabs::default();
+        // Tabs inside consecutive HTML comments should not be flagged
+        let content =
+            "<!-- first comment\nend --> text <!-- second comment\n\ttabbed content inside second comment\n-->";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "Expected 0 warnings but got {}: {:?}",
+            result.len(),
+            result
+        );
+    }
+
+    #[test]
+    fn test_fix_tilde_fence_longer_than_3() {
+        let rule = MD010NoHardTabs::default();
+        let content = "~~~~~\ncode\twith\ttab\n~~~~~\ntext\twith\ttab";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        // Tabs inside code block preserved, tabs outside replaced
+        assert_eq!(fixed, "~~~~~\ncode\twith\ttab\n~~~~~\ntext    with    tab");
+    }
+
+    #[test]
+    fn test_fix_indented_code_block_tabs_replaced() {
+        let rule = MD010NoHardTabs::default();
+        let content = "    code\twith\ttab\n\nNormal\ttext";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        // All tabs replaced, including those in indented code blocks
+        assert_eq!(fixed, "    code    with    tab\n\nNormal    text");
     }
 }

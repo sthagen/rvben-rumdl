@@ -558,10 +558,7 @@ pub static HTML_ENTITY_REGEX: LazyLock<FancyRegex> =
 pub static HUGO_SHORTCODE_REGEX: LazyLock<FancyRegex> =
     LazyLock::new(|| FancyRegex::new(r"\{\{[<%][\s\S]*?[%>]\}\}").unwrap());
 
-// Fourth lazy_static block for additional patterns
-// HTML comment patterns
-pub static HTML_COMMENT_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<!--").unwrap());
-pub static HTML_COMMENT_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-->").unwrap());
+// HTML comment pattern
 pub static HTML_COMMENT_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<!--[\s\S]*?-->").unwrap());
 
 // HTML heading pattern (matches <h1> through <h6> tags)

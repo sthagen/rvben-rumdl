@@ -532,19 +532,23 @@ fn test_reference_definition_indentation() {
 #[test]
 fn test_reference_definition_too_indented() {
     let rule = MD052ReferenceLinkImages::new();
-    // Reference definitions indented 4+ spaces are code blocks
+    // Reference definitions indented 4+ spaces are indented code blocks in CommonMark,
+    // so the reference definition is NOT recognized as a reference
     let content = r#"[link][ref]
 
     [ref]: http://example.com"#;
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
-    // Debug: check what's happening
-    if result.is_empty() {
-        println!("No errors found - reference was recognized despite 4-space indentation");
-    }
-    // The current implementation allows any amount of whitespace, so this passes
-    // In strict CommonMark, this should fail, but the current regex allows it
-    assert!(result.is_empty());
+    // The 4-space-indented line is an indented code block, so [ref] is undefined
+    assert_eq!(
+        result.len(),
+        1,
+        "4-space-indented reference definition is inside a code block and should not be recognized"
+    );
+    assert!(
+        result[0].message.contains("ref"),
+        "Should report undefined reference 'ref'"
+    );
 }
 
 #[test]

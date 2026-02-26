@@ -176,9 +176,9 @@ impl Rule for MD035HRStyle {
         };
 
         for (i, line) in lines.iter().enumerate() {
-            // Skip if this line is in frontmatter or a code block (using pre-computed LineInfo)
+            // Skip if this line is in frontmatter, code block, or MkDocs markdown HTML div
             if let Some(line_info) = ctx.lines.get(i)
-                && (line_info.in_front_matter || line_info.in_code_block)
+                && (line_info.in_front_matter || line_info.in_code_block || line_info.in_mkdocs_html_markdown)
             {
                 result.push(line.to_string());
                 continue;
@@ -530,5 +530,47 @@ mod tests {
 
         let table = config.as_table().unwrap();
         assert_eq!(table.get("style").unwrap().as_str().unwrap(), "consistent");
+    }
+
+    #[test]
+    fn test_fix_skips_mkdocs_html_markdown() {
+        // MkDocs grid cards use `---` inside `<div markdown>` blocks as card separators
+        // fix() should not replace these with a different HR style
+        let rule = MD035HRStyle::new("***".to_string());
+
+        let content = "Some content\n\n***\n\n<div class=\"grid cards\" markdown>\n\n- Card 1 content\n\n    ---\n\n    Card 1 footer\n\n</div>\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::MkDocs, None);
+
+        // check() should not flag the --- inside the div markdown block
+        let warnings = rule.check(&ctx).unwrap();
+        for w in &warnings {
+            assert_ne!(w.line, 9, "check() should not flag --- inside <div markdown> block");
+        }
+
+        // fix() should not modify the --- inside the div markdown block
+        let fixed = rule.fix(&ctx).unwrap();
+        assert!(
+            fixed.contains("    ---"),
+            "fix() should preserve --- inside <div markdown> block, got: {fixed}"
+        );
+    }
+
+    #[test]
+    fn test_fix_skips_mkdocs_html_markdown_preserves_outside() {
+        // Ensure fix() still changes HRs outside of MkDocs blocks
+        let rule = MD035HRStyle::new("***".to_string());
+
+        let content = "Some content\n\n---\n\n<div class=\"grid cards\" markdown>\n\n- Card content\n\n    ---\n\n    Card footer\n\n</div>\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::MkDocs, None);
+
+        let fixed = rule.fix(&ctx).unwrap();
+        // The --- on line 3 (outside div) should be changed to ***
+        let lines: Vec<&str> = fixed.lines().collect();
+        assert_eq!(lines[2], "***", "fix() should change --- outside <div markdown> to ***");
+        // The --- inside the div should remain unchanged
+        assert!(
+            fixed.contains("    ---"),
+            "fix() should preserve --- inside <div markdown>"
+        );
     }
 }
