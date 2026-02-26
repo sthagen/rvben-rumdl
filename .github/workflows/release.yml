@@ -800,9 +800,9 @@ jobs:
           TAG_NAME=${GITHUB_REF#refs/tags/}
           VERSION=${TAG_NAME#v}
 
-          # Wait for GitHub release to be fully available
+          # Wait for GitHub release assets to be fully available
           echo "Waiting for GitHub release to be available..."
-          sleep 30
+          sleep 90
 
           # Send dispatch with version info
           curl --fail -X POST \
