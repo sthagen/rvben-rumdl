@@ -553,7 +553,15 @@ jobs:
         if: ${{ inputs.dry_run != true && inputs.skip_crates_io != true }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --locked
+        run: |
+          if ! output=$(cargo publish --locked 2>&1); then
+            if echo "$output" | grep -q "already exists"; then
+              echo "⏭️ Crate already published to crates.io, skipping"
+            else
+              echo "$output"
+              exit 1
+            fi
+          fi
 
       - name: Test crates.io publish (dry run)
         if: ${{ inputs.dry_run == true && inputs.skip_crates_io != true }}
@@ -577,7 +585,8 @@ jobs:
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           # Upload only Python packages (wheels and sdist), not Homebrew archives
-          uv tool run twine upload artifacts/wheel-*/*.whl artifacts/sdist/*.tar.gz
+          # Use --skip-existing so re-runs don't fail on already-published wheels
+          uv tool run twine upload --skip-existing artifacts/wheel-*/*.whl artifacts/sdist/*.tar.gz
 
       - name: Test PyPI upload (dry run)
         if: ${{ inputs.dry_run == true && inputs.skip_pypi != true }}
@@ -616,7 +625,14 @@ jobs:
         if: ${{ inputs.dry_run != true && inputs.skip_npm != true }}
         run: |
           cd wasm-pkg
-          npm publish --provenance --access public
+          if ! output=$(npm publish --provenance --access public 2>&1); then
+            if echo "$output" | grep -q "previously published"; then
+              echo "⏭️ WASM package already published, skipping"
+            else
+              echo "$output"
+              exit 1
+            fi
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -642,7 +658,14 @@ jobs:
           for pkg in npm-cli/cli-*/; do
             echo "Publishing $(basename "$pkg")..."
             cd "$pkg"
-            npm publish --provenance --access public
+            if ! output=$(npm publish --provenance --access public 2>&1); then
+              if echo "$output" | grep -q "previously published"; then
+                echo "⏭️ $(basename "$pkg") already published, skipping"
+              else
+                echo "$output"
+                exit 1
+              fi
+            fi
             cd ../..
           done
 
@@ -652,7 +675,14 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd npm-cli/rumdl
-          npm publish --provenance --access public
+          if ! output=$(npm publish --provenance --access public 2>&1); then
+            if echo "$output" | grep -q "previously published"; then
+              echo "⏭️ Main CLI package already published, skipping"
+            else
+              echo "$output"
+              exit 1
+            fi
+          fi
 
       - name: Test CLI npm publish (dry run)
         if: ${{ inputs.dry_run == true && inputs.skip_npm != true }}
