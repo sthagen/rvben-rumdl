@@ -459,13 +459,39 @@ pub(crate) const MARKDOWNLINT_CONFIG_FILES: &[&str] = &[
 
 /// Create a default configuration file at the specified path
 pub fn create_default_config(path: &str) -> Result<(), ConfigError> {
-    // Check if file already exists
+    create_preset_config("default", path)
+}
+
+/// Create a configuration file with a specific style preset
+pub fn create_preset_config(preset: &str, path: &str) -> Result<(), ConfigError> {
     if Path::new(path).exists() {
         return Err(ConfigError::FileExists { path: path.to_string() });
     }
 
-    // Default configuration content
-    let default_config = r#"# rumdl configuration file
+    let config_content = match preset {
+        "default" => generate_default_preset(),
+        "google" => generate_google_preset(),
+        "relaxed" => generate_relaxed_preset(),
+        _ => {
+            return Err(ConfigError::UnknownPreset {
+                name: preset.to_string(),
+            });
+        }
+    };
+
+    match fs::write(path, config_content) {
+        Ok(_) => Ok(()),
+        Err(err) => Err(ConfigError::IoError {
+            source: err,
+            path: path.to_string(),
+        }),
+    }
+}
+
+/// Generate the default preset configuration content.
+/// Returns the same content as `create_default_config`.
+fn generate_default_preset() -> String {
+    r#"# rumdl configuration file
 
 # Inherit settings from another config file (relative to this file's directory)
 # extends = "../base.rumdl.toml"
@@ -534,16 +560,114 @@ respect-gitignore = true
 # [MD044]
 # names = ["rumdl", "Markdown", "GitHub"]  # Proper names that should be capitalized correctly
 # code-blocks = false  # Check code blocks for proper names (default: false, skips code blocks)
-"#;
+"#
+    .to_string()
+}
 
-    // Write the default configuration to the file
-    match fs::write(path, default_config) {
-        Ok(_) => Ok(()),
-        Err(err) => Err(ConfigError::IoError {
-            source: err,
-            path: path.to_string(),
-        }),
-    }
+/// Generate Google developer documentation style preset.
+/// Based on https://google.github.io/styleguide/docguide/style.html
+fn generate_google_preset() -> String {
+    r#"# rumdl configuration - Google developer documentation style
+# Based on https://google.github.io/styleguide/docguide/style.html
+
+[global]
+exclude = [
+    ".git",
+    ".github",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "CHANGELOG.md",
+    "LICENSE.md",
+]
+respect-gitignore = true
+
+# ATX-style headings required
+[MD003]
+style = "atx"
+
+# Unordered list style: dash
+[MD004]
+style = "dash"
+
+# 4-space indent for nested lists
+[MD007]
+indent = 4
+
+# Strict mode: no trailing spaces allowed (Google uses backslash for line breaks)
+[MD009]
+strict = true
+
+# 80-character line length
+[MD013]
+line-length = 80
+code-blocks = false
+tables = false
+
+# No trailing punctuation in headings
+[MD026]
+punctuation = ".,;:!。，；：！"
+
+# Fenced code blocks only (no indented code blocks)
+[MD046]
+style = "fenced"
+
+# Emphasis with underscores
+[MD049]
+style = "underscore"
+
+# Strong with asterisks
+[MD050]
+style = "asterisk"
+"#
+    .to_string()
+}
+
+/// Generate relaxed preset for existing projects adopting rumdl incrementally.
+/// Longer line lengths, fewer rules, lenient settings to minimize initial warnings.
+fn generate_relaxed_preset() -> String {
+    r#"# rumdl configuration - Relaxed preset
+# Lenient settings for existing projects adopting rumdl incrementally.
+# Minimizes initial warnings while still catching important issues.
+
+[global]
+exclude = [
+    ".git",
+    ".github",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "CHANGELOG.md",
+    "LICENSE.md",
+]
+respect-gitignore = true
+
+# Disable rules that produce the most noise on existing projects
+disable = [
+    "MD013",  # Line length - most existing files exceed 80 chars
+    "MD033",  # Inline HTML - commonly used in real-world markdown
+    "MD041",  # First line heading - not all files need it
+]
+
+# Consistent heading style (any style, just be consistent)
+[MD003]
+style = "consistent"
+
+# Consistent list style
+[MD004]
+style = "consistent"
+
+# Consistent emphasis style
+[MD049]
+style = "consistent"
+
+# Consistent strong style
+[MD050]
+style = "consistent"
+"#
+    .to_string()
 }
 
 /// Errors that can occur when loading configuration
@@ -572,6 +696,10 @@ pub enum ConfigError {
     /// Extends target file not found
     #[error("extends target not found: {path} (referenced from {from})")]
     ExtendsNotFound { path: String, from: String },
+
+    /// Unknown preset name
+    #[error("Unknown preset: {name}. Valid presets: default, google, relaxed")]
+    UnknownPreset { name: String },
 }
 
 /// Get a rule-specific configuration value
@@ -600,6 +728,47 @@ pub fn get_rule_config_value<T: serde::de::DeserializeOwned>(config: &Config, ru
     }
 
     None
+}
+
+/// Generate preset configuration for pyproject.toml format.
+/// Converts the .rumdl.toml preset to pyproject.toml section format.
+pub fn generate_pyproject_preset_config(preset: &str) -> Result<String, ConfigError> {
+    match preset {
+        "default" => Ok(generate_pyproject_config()),
+        other => {
+            let rumdl_config = match other {
+                "google" => generate_google_preset(),
+                "relaxed" => generate_relaxed_preset(),
+                _ => {
+                    return Err(ConfigError::UnknownPreset {
+                        name: other.to_string(),
+                    });
+                }
+            };
+            Ok(convert_rumdl_to_pyproject(&rumdl_config))
+        }
+    }
+}
+
+/// Convert a .rumdl.toml config string to pyproject.toml format.
+/// Rewrites `[global]` → `[tool.rumdl]` and `[MDXXX]` → `[tool.rumdl.MDXXX]`.
+fn convert_rumdl_to_pyproject(rumdl_config: &str) -> String {
+    let mut output = String::with_capacity(rumdl_config.len() + 128);
+    for line in rumdl_config.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') && !trimmed.starts_with("# [") {
+            let section = &trimmed[1..trimmed.len() - 1];
+            if section == "global" {
+                output.push_str("[tool.rumdl]");
+            } else {
+                output.push_str(&format!("[tool.rumdl.{section}]"));
+            }
+        } else {
+            output.push_str(line);
+        }
+        output.push('\n');
+    }
+    output
 }
 
 /// Generate default rumdl configuration for pyproject.toml

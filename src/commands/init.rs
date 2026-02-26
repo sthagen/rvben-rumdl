@@ -9,14 +9,20 @@ use rumdl_lib::config as rumdl_config;
 use rumdl_lib::exit_codes::exit;
 
 /// Handle the init command: create a new configuration file.
-pub fn handle_init(pyproject: bool) {
+pub fn handle_init(pyproject: bool, preset: Option<&str>, output: Option<String>) {
     if pyproject {
-        handle_pyproject_init();
+        handle_pyproject_init(preset);
     } else {
-        // Create default .rumdl.toml config file
-        match rumdl_config::create_default_config(".rumdl.toml") {
+        let output_path = output.as_deref().unwrap_or(".rumdl.toml");
+        let preset_name = preset.unwrap_or("default");
+
+        match rumdl_config::create_preset_config(preset_name, output_path) {
             Ok(()) => {
-                println!("Created default configuration file: .rumdl.toml");
+                if preset_name == "default" {
+                    println!("Created default configuration file: {output_path}");
+                } else {
+                    println!("Created {preset_name} configuration file: {output_path}");
+                }
 
                 // Offer to install VS Code extension
                 offer_vscode_extension_install();
@@ -29,8 +35,15 @@ pub fn handle_init(pyproject: bool) {
     }
 }
 
-fn handle_pyproject_init() {
-    let config_content = rumdl_config::generate_pyproject_config();
+fn handle_pyproject_init(preset: Option<&str>) {
+    let preset_name = preset.unwrap_or("default");
+    let config_content = match rumdl_config::generate_pyproject_preset_config(preset_name) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("{}: {}", "Error".red().bold(), e);
+            exit::tool_error();
+        }
+    };
 
     if Path::new("pyproject.toml").exists() {
         // pyproject.toml exists, ask to append

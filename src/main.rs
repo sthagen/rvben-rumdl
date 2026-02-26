@@ -85,8 +85,14 @@ enum Commands {
     /// Initialize a new configuration file
     Init {
         /// Generate configuration for pyproject.toml instead of .rumdl.toml
-        #[arg(long)]
+        #[arg(long, conflicts_with = "output")]
         pyproject: bool,
+        /// Use a style preset (default, google, relaxed)
+        #[arg(long, value_enum)]
+        preset: Option<Preset>,
+        /// Output file path (default: .rumdl.toml)
+        #[arg(long, short = 'o')]
+        output: Option<String>,
     },
     /// Show information about a rule or list all rules
     Rule {
@@ -194,6 +200,16 @@ pub enum ConfigSubcommand {
     File,
 }
 
+#[derive(Clone, ValueEnum)]
+enum Preset {
+    /// Default rumdl configuration
+    Default,
+    /// Google developer documentation style
+    Google,
+    /// Relaxed rules for existing projects
+    Relaxed,
+}
+
 #[derive(Clone, Default, ValueEnum)]
 enum Color {
     #[default]
@@ -233,8 +249,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Catch panics and print a message, exit 1
     let result = std::panic::catch_unwind(|| {
         match cli.command {
-            Commands::Init { pyproject } => {
-                commands::init::handle_init(pyproject);
+            Commands::Init {
+                pyproject,
+                preset,
+                output,
+            } => {
+                commands::init::handle_init(
+                    pyproject,
+                    preset.map(|p| match p {
+                        Preset::Default => "default",
+                        Preset::Google => "google",
+                        Preset::Relaxed => "relaxed",
+                    }),
+                    output,
+                );
             }
             Commands::Check(mut args) => {
                 args.fix_mode = if args.fix { FixMode::CheckFix } else { FixMode::Check };

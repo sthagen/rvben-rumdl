@@ -64,10 +64,11 @@ rumdl init --output custom.toml  # Custom output path
 
 **Options:**
 
-| Option            | Description                               |
-| ----------------- | ----------------------------------------- |
-| `--preset <NAME>` | Use a style preset (`google`, `default`)  |
-| `--output <PATH>` | Output file path (default: `.rumdl.toml`) |
+| Option            | Description                                       |
+| ----------------- | ------------------------------------------------- |
+| `--pyproject`     | Generate configuration for pyproject.toml         |
+| `--preset <NAME>` | Use a style preset (`default`, `google`, `relaxed`) |
+| `--output <PATH>` | Output file path (default: `.rumdl.toml`)         |
 
 ### `import <FILE>`
 
