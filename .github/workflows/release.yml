@@ -114,6 +114,7 @@ jobs:
 
       # Install only build-required tools (skip uv, nextest, watch, etc.)
       - name: Install mise tools
+        shell: bash
         run: |
           for attempt in 1 2 3; do
             mise install rust python "cargo:maturin" "cargo:cargo-zigbuild" zig --yes && break
