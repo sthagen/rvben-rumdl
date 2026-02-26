@@ -121,7 +121,8 @@ impl Rule for MD020NoMissingSpaceClosedAtx {
                                 "#".repeat(opening_hashes.as_str().len())
                             );
                             // Highlight the position right after the opening hashes
-                            start_col = opening_hashes.end() + 1;
+                            // Convert byte offset to character count for correct Unicode handling
+                            start_col = line[..opening_hashes.end()].chars().count() + 1;
                             length = 1;
                         } else if let Some(captures) = get_cached_fancy_regex(CLOSED_ATX_NO_SPACE_START_PATTERN_STR)
                             .ok()
@@ -134,7 +135,8 @@ impl Rule for MD020NoMissingSpaceClosedAtx {
                                 "#".repeat(opening_hashes.as_str().len())
                             );
                             // Highlight the position right after the opening hashes
-                            start_col = opening_hashes.end() + 1;
+                            // Convert byte offset to character count for correct Unicode handling
+                            start_col = line[..opening_hashes.end()].chars().count() + 1;
                             length = 1;
                         } else if let Some(captures) = get_cached_fancy_regex(CLOSED_ATX_NO_SPACE_END_PATTERN_STR)
                             .ok()
@@ -147,8 +149,9 @@ impl Rule for MD020NoMissingSpaceClosedAtx {
                                 "Missing space before {} at end of closed heading",
                                 "#".repeat(closing_hashes.as_str().len())
                             );
-                            // Highlight the position right before the closing hashes
-                            start_col = content.end() + 1;
+                            // Highlight the last character before the closing hashes
+                            // Convert byte offset to character count for correct Unicode handling
+                            start_col = line[..content.end()].chars().count() + 1;
                             length = 1;
                         }
 
@@ -256,5 +259,41 @@ mod tests {
         assert_eq!(result.len(), 2); // Should flag the two headings with missing spaces
         assert_eq!(result[0].line, 1);
         assert_eq!(result[1].line, 3);
+    }
+
+    #[test]
+    fn test_multibyte_char_column_position() {
+        let rule = MD020NoMissingSpaceClosedAtx;
+
+        // Multi-byte characters before the content should not affect column calculation
+        // "Ü" is 2 bytes in UTF-8 but 1 character
+        // "##Ünited##" has ## at byte 0-1, content starts at byte 2
+        // Column should be 3 (character position), not 3 (byte position) here they match
+        // But "##über##" tests that column after ## reflects character count
+        let content = "##Ünited##";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(result.len(), 1);
+        // Column should be based on character position, not byte offset
+        // "##" is 2 chars, so the position after ## is char position 3
+        // The byte offset of .end() for the opening hashes is 2, so start_col = 2 + 1 = 3
+        // For ASCII this is the same, but let's verify with a more complex case
+
+        // Content with multi-byte chars BEFORE closing hashes
+        // "##Ü test##" - Ü is 2 bytes, test starts at byte 4, char 3
+        // Content ends and closing hashes start after "Ü test" = 7 chars / 8 bytes
+        let content = "## Ü test##";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(result.len(), 1);
+        // "## Ü test##" - regex group 3 (content) ends at byte 9 (after "Ü tes")
+        // line[..9] = "## Ü tes" = 8 characters, so start_col = 8 + 1 = 9
+        // Without the fix, byte offset 9 + 1 = 10 (wrong for non-ASCII)
+        assert_eq!(
+            result[0].column, 9,
+            "Column should use character position, not byte offset"
+        );
     }
 }

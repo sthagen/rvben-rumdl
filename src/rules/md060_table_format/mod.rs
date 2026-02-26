@@ -501,9 +501,14 @@ impl MD060TableFormat {
             return false;
         }
 
-        // Check 1: All rows must have the same length
-        let first_len = table_lines[0].len();
-        if !table_lines.iter().all(|line| line.len() == first_len) {
+        // Check 1: All rows must have the same display width
+        // Use .width() instead of .len() to handle CJK characters correctly
+        // (CJK chars are 3 bytes but 2 display columns)
+        let first_width = UnicodeWidthStr::width(table_lines[0]);
+        if !table_lines
+            .iter()
+            .all(|line| UnicodeWidthStr::width(*line) == first_width)
+        {
             return false;
         }
 
@@ -2424,5 +2429,40 @@ style = "aligned"
             fixed, content,
             "Already aligned table should be preserved with column-align=auto"
         );
+    }
+
+    #[test]
+    fn test_cjk_table_display_aligned_not_flagged() {
+        // Verify that alignment detection uses display width (.width()), not byte
+        // length (.len()). CJK chars are 3 bytes but 2 display columns, so a
+        // visually aligned table must not be flagged as misaligned.
+        use crate::config::MarkdownFlavor;
+
+        // This table is display-aligned: "Hello " and "你好  " are both 6 display columns wide
+        let table_lines: Vec<&str> = vec![
+            "| Header | Name |",
+            "| ------ | ---- |",
+            "| Hello  | Test |",
+            "| 你好   | Test |",
+        ];
+
+        let result = MD060TableFormat::is_table_already_aligned(&table_lines, MarkdownFlavor::Standard, false);
+        assert!(
+            result,
+            "Table with CJK characters that is display-aligned should be recognized as aligned"
+        );
+    }
+
+    #[test]
+    fn test_cjk_table_not_reformatted_when_aligned() {
+        // End-to-end test: a display-aligned CJK table should not trigger MD060
+        let rule = MD060TableFormat::new(true, "aligned".to_string());
+        // Build a table that is already correctly aligned (display-width)
+        let content = "| Header | Name |\n| ------ | ---- |\n| Hello  | Test |\n| 你好   | Test |\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+
+        // If the table is display-aligned, MD060 should preserve it as-is
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(fixed, content, "Display-aligned CJK table should not be reformatted");
     }
 }

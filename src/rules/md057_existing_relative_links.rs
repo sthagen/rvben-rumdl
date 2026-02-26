@@ -706,21 +706,30 @@ impl Rule for MD057ExistingRelativeLinks {
 
             // Check for unnecessary path traversal (compact-paths)
             if let Some(suggestion) = self.compact_path_suggestion(url, &base_path) {
+                // Find the URL position within the image syntax using document byte offsets.
+                // Search from image.byte_offset (the `!` character) to locate the URL string.
+                let fix = content[image.byte_offset..image.byte_end].find(url).map(|url_offset| {
+                    let fix_byte_start = image.byte_offset + url_offset;
+                    let fix_byte_end = fix_byte_start + url.len();
+                    Fix {
+                        range: fix_byte_start..fix_byte_end,
+                        replacement: suggestion.clone(),
+                    }
+                });
+
                 let img_line_start_byte = ctx.line_index.get_line_start_byte(image.line).unwrap_or(0);
-                let fix_byte_start = img_line_start_byte + image.start_col;
-                let fix_byte_end = fix_byte_start + url.len();
+                let url_col = fix
+                    .as_ref()
+                    .map_or(image.start_col + 1, |f| f.range.start - img_line_start_byte + 1);
                 warnings.push(LintWarning {
                     rule_name: Some(self.name().to_string()),
                     line: image.line,
-                    column: image.start_col + 1,
+                    column: url_col,
                     end_line: image.line,
-                    end_column: image.start_col + 1 + url.len(),
+                    end_column: url_col + url.len(),
                     message: format!("Relative link '{url}' can be simplified to '{suggestion}'"),
                     severity: Severity::Warning,
-                    fix: Some(Fix {
-                        range: fix_byte_start..fix_byte_end,
-                        replacement: suggestion,
-                    }),
+                    fix,
                 });
             }
 

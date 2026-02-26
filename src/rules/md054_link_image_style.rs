@@ -285,10 +285,12 @@ impl Rule for MD054LinkImageStyle {
             for m in filtered_matches {
                 let match_start_char = line[..m.start].chars().count();
 
-                if !ctx.is_in_code_span(line_num + 1, match_start_char) && !self.is_style_allowed(m.style) {
-                    let match_len = line[m.start..m.end].chars().count();
+                // is_in_code_span expects 1-indexed column
+                if !ctx.is_in_code_span(line_num + 1, match_start_char + 1) && !self.is_style_allowed(m.style) {
+                    // calculate_match_range expects byte positions, not character counts
+                    let match_byte_len = m.end - m.start;
                     let (start_line, start_col, end_line, end_col) =
-                        calculate_match_range(line_num + 1, line, match_start_char, match_len);
+                        calculate_match_range(line_num + 1, line, m.start, match_byte_len);
 
                     warnings.push(LintWarning {
                         rule_name: Some(self.name().to_string()),
@@ -562,6 +564,40 @@ mod tests {
 
         // Only second line should have inline link
         assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_cjk_correct_column_positions() {
+        // Verify that column positions use byte offsets, not character counts,
+        // so CJK text produces correct warning positions.
+        let rule = MD054LinkImageStyle::new(false, false, false, true, false, false);
+        // "日本語テスト " = 7 chars, 19 bytes (6 CJK chars * 3 bytes + 1 space)
+        let content = "日本語テスト <https://example.com>";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result[0].message.contains("'autolink'"));
+        // The '<' starts at byte position 19 (after 6 CJK chars * 3 bytes + 1 space)
+        // which is character position 8 (1-indexed)
+        assert_eq!(
+            result[0].column, 8,
+            "Column should be 1-indexed character position of '<'"
+        );
+    }
+
+    #[test]
+    fn test_code_span_detection_with_cjk_prefix() {
+        // Verify that is_in_code_span correctly detects code spans after CJK text
+        // This tests the 1-indexed column fix
+        let rule = MD054LinkImageStyle::new(false, false, false, true, false, false);
+        // Link inside code span after CJK characters
+        let content = "日本語 `[link](url)` text";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        // The link is inside a code span, so it should not be flagged
+        assert_eq!(result.len(), 0, "Link inside code span should not be flagged");
     }
 
     #[test]

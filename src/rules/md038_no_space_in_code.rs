@@ -180,12 +180,23 @@ impl MD038NoSpaceInCode {
 
         // For each pair of adjacent code spans, check what's between them
         for (_, other_span) in &same_line_spans {
-            let start = current_span.end_col.min(other_span.end_col);
-            let end = current_span.start_col.max(other_span.start_col);
+            let start_char = current_span.end_col.min(other_span.end_col);
+            let end_char = current_span.start_col.max(other_span.start_col);
 
-            if start < end && end <= line_content.len() {
-                // Use .get() to safely handle multi-byte UTF-8 characters
-                if let Some(between) = line_content.get(start..end) {
+            if start_char < end_char {
+                // Convert character positions to byte offsets for string slicing
+                let char_indices: Vec<(usize, char)> = line_content.char_indices().collect();
+                let start_byte = char_indices.get(start_char).map(|(i, _)| *i);
+                let end_byte = char_indices
+                    .get(end_char)
+                    .map(|(i, _)| *i)
+                    .unwrap_or(line_content.len());
+
+                if let Some(start_byte) = start_byte
+                    && start_byte < end_byte
+                    && end_byte <= line_content.len()
+                {
+                    let between = &line_content[start_byte..end_byte];
                     // If there's text containing "code" or similar patterns between spans,
                     // it's likely they're showing nested backticks
                     if between.contains("code") || between.contains("backtick") {
@@ -1359,5 +1370,25 @@ Regular code: `function test() {}`
             result.is_empty(),
             "Dataview expressions and regular code should work together"
         );
+    }
+
+    #[test]
+    fn test_unicode_between_code_spans_no_panic() {
+        // Verify that multi-byte characters between code spans do not cause panics
+        // or incorrect slicing in the nested-backtick detection logic.
+        let rule = MD038NoSpaceInCode::new();
+
+        // Multi-byte character (U-umlaut = 2 bytes) between two code spans
+        let content = "Use `one` \u{00DC}nited `two` for backtick examples.";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx);
+        // Should not panic; any warnings or lack thereof are acceptable
+        assert!(result.is_ok(), "Should not panic with Unicode between code spans");
+
+        // CJK characters (3 bytes each) between code spans
+        let content_cjk = "Use `one` \u{4E16}\u{754C} `two` for examples.";
+        let ctx_cjk = crate::lint_context::LintContext::new(content_cjk, crate::config::MarkdownFlavor::Standard, None);
+        let result_cjk = rule.check(&ctx_cjk);
+        assert!(result_cjk.is_ok(), "Should not panic with CJK between code spans");
     }
 }

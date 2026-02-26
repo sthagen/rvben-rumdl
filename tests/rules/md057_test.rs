@@ -2554,3 +2554,112 @@ fn test_compact_paths_dot_prefix_reference_def() {
         compact_warnings[0].message
     );
 }
+
+#[test]
+fn test_compact_paths_image_fix_produces_correct_output() {
+    let temp_dir = tempdir().unwrap();
+    let base_path = temp_dir.path();
+
+    let sub_dir = base_path.join("sub_dir");
+    fs::create_dir_all(&sub_dir).unwrap();
+    fs::write(sub_dir.join("image.png"), "PNG data").unwrap();
+
+    let content = "![my image](../sub_dir/image.png)\n";
+
+    let config = make_compact_paths_config();
+    let rule = MD057ExistingRelativeLinks::from_config_struct(config).with_path(&sub_dir);
+    let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let fixed = rule.fix(&ctx).unwrap();
+
+    assert_eq!(
+        fixed, "![my image](image.png)\n",
+        "Image fix should only replace the URL, not corrupt the markdown syntax"
+    );
+}
+
+#[test]
+fn test_compact_paths_image_fix_dot_prefix() {
+    let temp_dir = tempdir().unwrap();
+    let base_path = temp_dir.path();
+
+    fs::write(base_path.join("img.png"), "PNG").unwrap();
+
+    let content = "![alt](./img.png)\n";
+
+    let config = make_compact_paths_config();
+    let rule = MD057ExistingRelativeLinks::from_config_struct(config).with_path(base_path);
+    let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let fixed = rule.fix(&ctx).unwrap();
+
+    assert_eq!(
+        fixed, "![alt](img.png)\n",
+        "Image fix with ./ prefix should only replace the URL portion"
+    );
+}
+
+#[test]
+fn test_compact_paths_image_fix_with_text_before() {
+    let temp_dir = tempdir().unwrap();
+    let base_path = temp_dir.path();
+
+    let sub_dir = base_path.join("sub");
+    fs::create_dir_all(&sub_dir).unwrap();
+    fs::write(sub_dir.join("photo.jpg"), "JPEG data").unwrap();
+
+    let content = "Some text before ![photo](../sub/photo.jpg) and after\n";
+
+    let config = make_compact_paths_config();
+    let rule = MD057ExistingRelativeLinks::from_config_struct(config).with_path(&sub_dir);
+    let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let fixed = rule.fix(&ctx).unwrap();
+
+    assert_eq!(
+        fixed, "Some text before ![photo](photo.jpg) and after\n",
+        "Image fix should preserve surrounding text"
+    );
+}
+
+#[test]
+fn test_compact_paths_image_fix_unicode_before() {
+    let temp_dir = tempdir().unwrap();
+    let base_path = temp_dir.path();
+
+    fs::write(base_path.join("img.png"), "PNG").unwrap();
+
+    let content = "日本語 ![画像](./img.png)\n";
+
+    let config = make_compact_paths_config();
+    let rule = MD057ExistingRelativeLinks::from_config_struct(config).with_path(base_path);
+    let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let fixed = rule.fix(&ctx).unwrap();
+
+    assert_eq!(
+        fixed, "日本語 ![画像](img.png)\n",
+        "Image fix should handle multi-byte characters correctly"
+    );
+}
+
+#[test]
+fn test_compact_paths_image_fix_byte_range_targets_url_only() {
+    let temp_dir = tempdir().unwrap();
+    let base_path = temp_dir.path();
+
+    fs::write(base_path.join("img.png"), "PNG").unwrap();
+
+    let content = "![alt](./img.png)\n";
+
+    let config = make_compact_paths_config();
+    let rule = MD057ExistingRelativeLinks::from_config_struct(config).with_path(base_path);
+    let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    let compact_warnings: Vec<_> = result.iter().filter(|w| w.message.contains("simplified")).collect();
+    assert_eq!(compact_warnings.len(), 1);
+
+    let fix = compact_warnings[0].fix.as_ref().expect("Should have a fix");
+    let replaced_text = &content[fix.range.clone()];
+    assert_eq!(
+        replaced_text, "./img.png",
+        "Fix range should cover the URL './img.png', not '{replaced_text}'"
+    );
+}

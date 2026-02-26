@@ -412,6 +412,7 @@ impl MD063HeadingCapitalization {
         let total_words = original_words.len();
 
         // Pre-compute byte position of each word for canonical form lookup.
+        // Use usize::MAX as sentinel for unfound words so canonical_forms.get() returns None.
         let mut word_positions: Vec<usize> = Vec::with_capacity(original_words.len());
         let mut pos = 0;
         for word in &original_words {
@@ -419,7 +420,7 @@ impl MD063HeadingCapitalization {
                 word_positions.push(pos + rel);
                 pos = pos + rel + word.len();
             } else {
-                word_positions.push(0);
+                word_positions.push(usize::MAX);
             }
         }
 
@@ -764,6 +765,7 @@ impl MD063HeadingCapitalization {
         }
 
         // Pre-compute byte position of each word so we can look up canonical forms.
+        // Use usize::MAX as sentinel for unfound words so canonical_forms.get() returns None.
         let mut word_positions: Vec<usize> = Vec::with_capacity(words.len());
         let mut pos = 0;
         for word in &words {
@@ -771,7 +773,7 @@ impl MD063HeadingCapitalization {
                 word_positions.push(pos + rel);
                 pos = pos + rel + word.len();
             } else {
-                word_positions.push(0);
+                word_positions.push(usize::MAX);
             }
         }
 
@@ -2617,6 +2619,63 @@ mod tests {
             fix_text.contains("Good Application"),
             "from_config should wire MD044 names into MD063; fix should preserve \
              'Good Application', got: {fix_text:?}"
+        );
+    }
+
+    #[test]
+    fn test_title_case_short_word_not_confused_with_substring() {
+        // Verify that short preposition matching ("in") does not trigger on
+        // substrings of longer words ("insert"). Title case must capitalize
+        // "insert" while keeping "in" lowercase.
+        let rule = create_rule_with_style(HeadingCapStyle::TitleCase);
+
+        // "in" is a short preposition (should be lowercase in title case)
+        // "insert" contains "in" as substring but is a regular word (should be capitalized)
+        let content = "# in the insert\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1, "Should flag the heading");
+        let fix = result[0].fix.as_ref().expect("Fix should be present");
+        // "In" capitalized as first word, "the" lowercase as article, "Insert" capitalized
+        assert!(
+            fix.replacement.contains("In the Insert"),
+            "Expected 'In the Insert', got: {:?}",
+            fix.replacement
+        );
+    }
+
+    #[test]
+    fn test_title_case_or_not_confused_with_orchestra() {
+        let rule = create_rule_with_style(HeadingCapStyle::TitleCase);
+
+        // "or" is a conjunction (should be lowercase in title case)
+        // "orchestra" contains "or" as substring but is a regular word
+        let content = "# or the orchestra\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1, "Should flag the heading");
+        let fix = result[0].fix.as_ref().expect("Fix should be present");
+        // "Or" capitalized as first word, "the" lowercase, "Orchestra" capitalized
+        assert!(
+            fix.replacement.contains("Or the Orchestra"),
+            "Expected 'Or the Orchestra', got: {:?}",
+            fix.replacement
+        );
+    }
+
+    #[test]
+    fn test_all_caps_preserves_all_words() {
+        let rule = create_rule_with_style(HeadingCapStyle::AllCaps);
+
+        let content = "# in the insert\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1, "Should flag the heading");
+        let fix = result[0].fix.as_ref().expect("Fix should be present");
+        assert!(
+            fix.replacement.contains("IN THE INSERT"),
+            "All caps should uppercase all words, got: {:?}",
+            fix.replacement
         );
     }
 }
