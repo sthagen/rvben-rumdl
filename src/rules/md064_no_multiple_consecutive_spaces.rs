@@ -197,12 +197,13 @@ impl MD064NoMultipleConsecutiveSpaces {
     /// Pattern: [label]: URL or [label]:  URL
     fn is_reference_link_definition(&self, line: &str, match_start: usize) -> bool {
         let trimmed = line.trim_start();
+        let leading_spaces = line.len() - trimmed.len();
 
         // Reference link pattern: [label]: URL
         if trimmed.starts_with('[')
             && let Some(bracket_end) = trimmed.find("]:")
         {
-            let colon_pos = trimmed.len() - trimmed.trim_start().len() + bracket_end + 2;
+            let colon_pos = leading_spaces + bracket_end + 2;
             // Check if the match is right after the ]: marker
             if match_start >= colon_pos - 1 && match_start <= colon_pos + 1 {
                 return true;
@@ -1688,5 +1689,31 @@ That's right, no `width`, no `height`, no `viewBox`.  There is no easy
             "Issue #364: All sentence-ending double spaces should be allowed with inline config. Found {} warnings",
             result.len()
         );
+    }
+
+    #[test]
+    fn test_indented_reference_link_not_flagged() {
+        // Bug: Reference link definitions with leading whitespace had incorrect
+        // colon_pos calculation (leading whitespace count was always 0)
+        let rule = MD064NoMultipleConsecutiveSpaces::default();
+
+        // Indented reference link with extra spaces after ]: should not be flagged
+        let content = "   [label]:  https://example.com";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "Indented reference link definitions should not be flagged, got: {:?}",
+            result
+                .iter()
+                .map(|w| format!("col={}: {}", w.column, &w.message))
+                .collect::<Vec<_>>()
+        );
+
+        // Non-indented reference link should still not be flagged
+        let content = "[label]:  https://example.com";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(result.is_empty(), "Reference link definitions should not be flagged");
     }
 }

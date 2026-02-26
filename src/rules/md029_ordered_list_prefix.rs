@@ -372,7 +372,9 @@ impl Rule for MD029OrderedListPrefix {
         }
 
         // Quick check for any ordered list markers before processing
-        if !ctx.content.contains('.') || !ctx.content.lines().any(|line| ORDERED_LIST_MARKER_REGEX.is_match(line)) {
+        if (!ctx.content.contains('.') && !ctx.content.contains(')'))
+            || !ctx.content.lines().any(|line| ORDERED_LIST_MARKER_REGEX.is_match(line))
+        {
             return Ok(Vec::new());
         }
 

@@ -560,14 +560,56 @@ impl Rule for MD041FirstLineHeading {
             let first_line_content = first_line_info.content(ctx.content);
             let (start_line, start_col, end_line, end_col) = calculate_line_range(first_line, first_line_content);
 
-            // Only provide fix suggestion if the fix is actually applicable
-            // can_fix checks: fix_enabled, heading exists, no content before heading, not HTML heading
+            // Compute the actual replacement so that LSP quick-fix can apply it
+            // directly without calling fix(). For simple cases (releveling,
+            // promote-plain-text at the first content line), we use a targeted
+            // range. For complex cases (moving headings, inserting derived
+            // titles), we replace the entire document via fix().
             let fix = if self.can_fix(ctx) {
-                let range_start = first_line_info.byte_offset;
-                let range_end = range_start + first_line_info.byte_len;
-                Some(Fix {
-                    range: range_start..range_end,
-                    replacement: String::new(), // Placeholder - fix() method handles actual replacement
+                self.analyze_for_fix(ctx).and_then(|plan| {
+                    let range_start = first_line_info.byte_offset;
+                    let range_end = range_start + first_line_info.byte_len;
+                    match &plan {
+                        FixPlan::MoveOrRelevel {
+                            heading_idx,
+                            current_level,
+                            needs_level_fix,
+                            is_setext,
+                            ..
+                        } if *heading_idx == first_line_idx => {
+                            // Heading is already at the correct position, just needs releveling
+                            let heading_line = ctx.lines[*heading_idx].content(ctx.content);
+                            let replacement = if *needs_level_fix || *is_setext {
+                                self.fix_heading_level(heading_line, *current_level, self.level)
+                            } else {
+                                heading_line.to_string()
+                            };
+                            Some(Fix {
+                                range: range_start..range_end,
+                                replacement,
+                            })
+                        }
+                        FixPlan::PromotePlainText { title_line_idx, .. } if *title_line_idx == first_line_idx => {
+                            let replacement = format!(
+                                "{} {}",
+                                "#".repeat(self.level),
+                                ctx.lines[*title_line_idx].content(ctx.content).trim()
+                            );
+                            Some(Fix {
+                                range: range_start..range_end,
+                                replacement,
+                            })
+                        }
+                        _ => {
+                            // Complex multi-line operations (moving headings, inserting
+                            // derived titles, promoting non-first-line text): replace
+                            // the entire document via fix().
+                            self.fix(ctx).ok().map(|fixed_content| Fix {
+                                range: 0..ctx.content.len(),
+                                replacement: fixed_content,
+                            })
+                        }
+                    }
                 })
             } else {
                 None
@@ -2314,5 +2356,70 @@ mod tests {
         assert!(!MD041FirstLineHeading::is_title_candidate("- list item", true));
         assert!(!MD041FirstLineHeading::is_title_candidate("* bullet", true));
         assert!(!MD041FirstLineHeading::is_title_candidate("> blockquote", true));
+    }
+
+    #[test]
+    fn test_fix_replacement_not_empty_for_plain_text_promotion() {
+        // Verify that the fix replacement for plain-text-to-heading promotion is
+        // non-empty, so applying the fix does not delete the line.
+        let rule = MD041FirstLineHeading::with_pattern(1, false, None, true);
+        // Title candidate: short text, no trailing punctuation, followed by blank line
+        let content = "My Document Title\n\nMore content follows.";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(warnings.len(), 1);
+        let fix = warnings[0]
+            .fix
+            .as_ref()
+            .expect("Fix should be present for promotable text");
+        assert!(
+            !fix.replacement.is_empty(),
+            "Fix replacement must not be empty — applying it directly must produce valid output"
+        );
+        assert!(
+            fix.replacement.starts_with("# "),
+            "Fix replacement should be a level-1 heading, got: {:?}",
+            fix.replacement
+        );
+        assert_eq!(fix.replacement, "# My Document Title");
+    }
+
+    #[test]
+    fn test_fix_replacement_not_empty_for_releveling() {
+        // When the first line is a heading at the wrong level, the Fix should
+        // contain the correctly-leveled heading, not an empty string.
+        let rule = MD041FirstLineHeading::with_pattern(1, false, None, true);
+        let content = "## Wrong Level\n\nContent.";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(warnings.len(), 1);
+        let fix = warnings[0].fix.as_ref().expect("Fix should be present for releveling");
+        assert!(
+            !fix.replacement.is_empty(),
+            "Fix replacement must not be empty for releveling"
+        );
+        assert_eq!(fix.replacement, "# Wrong Level");
+    }
+
+    #[test]
+    fn test_fix_replacement_applied_produces_valid_output() {
+        // Verify that applying the Fix from check() produces the same result as fix()
+        let rule = MD041FirstLineHeading::with_pattern(1, false, None, true);
+        // Title candidate: short, no trailing punctuation, followed by blank line
+        let content = "My Document\n\nMore content.";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(warnings.len(), 1);
+        let fix = warnings[0].fix.as_ref().expect("Fix should be present");
+
+        // Apply Fix directly (like LSP would)
+        let mut patched = content.to_string();
+        patched.replace_range(fix.range.clone(), &fix.replacement);
+
+        // Apply via fix() method
+        let fixed = rule.fix(&ctx).unwrap();
+
+        assert_eq!(patched, fixed, "Applying Fix directly should match fix() output");
     }
 }

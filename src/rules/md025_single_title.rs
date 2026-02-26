@@ -115,18 +115,29 @@ impl MD025SingleTitle {
             "guides",
         ];
 
-        // Check if the heading starts with these patterns
+        // Check if the heading matches these patterns using whole-word matching
+        let words: Vec<&str> = lower_text.split_whitespace().collect();
         section_indicators.iter().any(|&indicator| {
-            lower_text.starts_with(indicator) ||
+            // Multi-word indicators need contiguous word matching
+            let indicator_words: Vec<&str> = indicator.split_whitespace().collect();
+            let starts_with_indicator = if indicator_words.len() == 1 {
+                words.first() == Some(&indicator)
+            } else {
+                words.len() >= indicator_words.len()
+                    && words[..indicator_words.len()] == indicator_words[..]
+            };
+
+            starts_with_indicator ||
             lower_text.starts_with(&format!("{indicator}:")) ||
-            lower_text.contains(&format!(" {indicator}")) ||
+            // Whole-word match anywhere in the heading
+            words.iter().any(|&word| word == indicator) ||
+            // Handle multi-word indicators appearing as a contiguous subsequence
+            (indicator_words.len() > 1 && words.windows(indicator_words.len()).any(|w| w == indicator_words.as_slice())) ||
             // Handle appendix numbering like "Appendix A", "Appendix 1"
-            (indicator == "appendix" && (
-                lower_text.matches("appendix").count() == 1 &&
-                (lower_text.contains(" a") || lower_text.contains(" b") ||
-                 lower_text.contains(" 1") || lower_text.contains(" 2") ||
-                 lower_text.contains(" i") || lower_text.contains(" ii"))
-            ))
+            (indicator == "appendix" && words.contains(&"appendix") && words.len() >= 2 && {
+                let after_appendix = words.iter().skip_while(|&&w| w != "appendix").nth(1);
+                matches!(after_appendix, Some(&"a" | &"b" | &"c" | &"d" | &"1" | &"2" | &"3" | &"i" | &"ii" | &"iii" | &"iv"))
+            })
         })
     }
 
@@ -899,5 +910,47 @@ mod tests {
             rule.should_skip(&ctx),
             "should_skip should return true with no frontmatter title and single H1"
         );
+    }
+
+    #[test]
+    fn test_section_indicator_whole_word_matching() {
+        // Bug: substring matching causes false matches (e.g., "reindex" matches " index")
+        let config = md025_config::MD025Config {
+            allow_document_sections: true,
+            ..Default::default()
+        };
+        let rule = MD025SingleTitle::from_config_struct(config);
+
+        // These should NOT match section indicators (they contain indicators as substrings)
+        let false_positive_cases = vec![
+            "# Main Title\n\n# Understanding Reindex Operations",
+            "# Main Title\n\n# The Summarization Pipeline",
+            "# Main Title\n\n# Data Indexing Strategy",
+            "# Main Title\n\n# Unsupported Browsers",
+        ];
+
+        for case in false_positive_cases {
+            let ctx = crate::lint_context::LintContext::new(case, crate::config::MarkdownFlavor::Standard, None);
+            let result = rule.check(&ctx).unwrap();
+            assert_eq!(
+                result.len(),
+                1,
+                "Should flag duplicate H1 (not a section indicator): {case}"
+            );
+        }
+
+        // These SHOULD still match as legitimate section indicators
+        let true_positive_cases = vec![
+            "# Main Title\n\n# Index",
+            "# Main Title\n\n# Summary",
+            "# Main Title\n\n# About",
+            "# Main Title\n\n# References",
+        ];
+
+        for case in true_positive_cases {
+            let ctx = crate::lint_context::LintContext::new(case, crate::config::MarkdownFlavor::Standard, None);
+            let result = rule.check(&ctx).unwrap();
+            assert!(result.is_empty(), "Should allow section indicator heading: {case}");
+        }
     }
 }

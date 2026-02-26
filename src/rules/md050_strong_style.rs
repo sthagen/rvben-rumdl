@@ -258,17 +258,8 @@ impl Rule for MD050StrongStyle {
                     continue;
                 }
 
-                // Only skip HTML tag content if we're actually inside the tag (between < and >)
-                // not just on the same line as a tag
-                let mut inside_html_tag = false;
-                for tag in ctx.html_tags().iter() {
-                    // The emphasis must start after < and before >
-                    if tag.byte_offset < match_byte_pos && match_byte_pos < tag.byte_end - 1 {
-                        inside_html_tag = true;
-                        break;
-                    }
-                }
-                if inside_html_tag {
+                // Skip strong emphasis inside HTML tags
+                if self.is_in_html_tag(ctx, match_byte_pos) {
                     continue;
                 }
 
@@ -925,5 +916,38 @@ $$
         // Only the strong between math blocks should be flagged
         assert_eq!(result.len(), 1, "Expected 1 warning. Got: {result:?}");
         assert!(result[0].message.contains("**"));
+    }
+
+    #[test]
+    fn test_html_tag_skip_consistency_between_check_and_fix() {
+        // Verify that check() and fix() share the same HTML tag boundary logic,
+        // so double underscores inside HTML attributes are skipped consistently.
+        let rule = MD050StrongStyle::new(StrongStyle::Asterisk);
+
+        let content = r#"<a href="__test__">link</a>
+
+This __should be flagged__ text."#;
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+
+        let check_result = rule.check(&ctx).unwrap();
+        let fix_result = rule.fix(&ctx).unwrap();
+
+        // Only the __should be flagged__ outside the HTML tag should be flagged
+        assert_eq!(
+            check_result.len(),
+            1,
+            "check() should flag exactly one emphasis outside HTML tags"
+        );
+        assert!(check_result[0].message.contains("**"));
+
+        // fix() should only transform the same emphasis that check() flagged
+        assert!(
+            fix_result.contains("**should be flagged**"),
+            "fix() should convert the flagged emphasis"
+        );
+        assert!(
+            fix_result.contains("__test__"),
+            "fix() should not modify emphasis inside HTML tags"
+        );
     }
 }

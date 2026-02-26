@@ -228,10 +228,10 @@ impl Rule for MD040FencedCodeLanguage {
         for error in self.validate_config() {
             warnings.push(LintWarning {
                 rule_name: Some(self.name().to_string()),
-                line: 0,
-                column: 0,
-                end_line: 0,
-                end_column: 0,
+                line: 1,
+                column: 1,
+                end_line: 1,
+                end_column: 1,
                 message: format!("[config error] {error}"),
                 severity: Severity::Error,
                 fix: None,
@@ -1067,6 +1067,40 @@ echo again
         let rule = MD040FencedCodeLanguage::with_config(config);
         let errors = rule.validate_config();
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_config_error_uses_valid_line_column() {
+        let config = md040_config::MD040Config {
+            preferred_aliases: {
+                let mut map = std::collections::HashMap::new();
+                map.insert("Shell".to_string(), "invalid_alias".to_string());
+                map
+            },
+            ..Default::default()
+        };
+        let rule = MD040FencedCodeLanguage::with_config(config);
+
+        let content = "```shell\necho hello\n```";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        // Find the config error warning
+        let config_error = result.iter().find(|w| w.message.contains("[config error]"));
+        assert!(config_error.is_some(), "Should have a config error warning");
+
+        let warning = config_error.unwrap();
+        // Line and column should be 1-indexed (not 0)
+        assert!(
+            warning.line >= 1,
+            "Config error line should be >= 1, got {}",
+            warning.line
+        );
+        assert!(
+            warning.column >= 1,
+            "Config error column should be >= 1, got {}",
+            warning.column
+        );
     }
 
     // =========================================================================

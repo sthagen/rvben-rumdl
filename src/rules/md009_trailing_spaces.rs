@@ -238,15 +238,7 @@ impl Rule for MD009TrailingSpaces {
                 severity: Severity::Warning,
                 fix: Some(Fix {
                     range: fix_range,
-                    replacement: if !self.config.strict
-                        && !is_truly_last_line
-                        && has_only_ascii_trailing
-                        && trailing_ascii_spaces == self.config.br_spaces.get()
-                    {
-                        " ".repeat(self.config.br_spaces.get())
-                    } else {
-                        String::new()
-                    },
+                    replacement: String::new(),
                 }),
             });
         }
@@ -769,8 +761,8 @@ mod tests {
 
     #[test]
     fn test_unicode_whitespace_idempotent_fix() {
-        // Regression: U+2000 (EN QUAD) mixed with ASCII space caused non-idempotent fixes.
-        // The fix must strip ALL trailing whitespace (Unicode and ASCII) in one pass.
+        // Verify that mixed Unicode (U+2000 EN QUAD) and ASCII trailing whitespace
+        // is stripped in a single idempotent pass.
         let rule = MD009TrailingSpaces::default(); // br_spaces=2
 
         // Case from proptest: blockquote with U+2000 and ASCII space
@@ -849,5 +841,29 @@ mod tests {
         let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
         let fixed = rule.fix(&ctx).unwrap();
         assert_eq!(fixed, "text\nmore\n");
+    }
+
+    #[test]
+    fn test_fix_replacement_always_removes_trailing_spaces() {
+        // The fix replacement must always be an empty string, fully removing
+        // trailing spaces that do not match the br_spaces allowance.
+        let rule = MD009TrailingSpaces::new(2, false);
+
+        // 3 trailing spaces (not matching br_spaces=2) should produce a warning
+        // with an empty replacement that removes them entirely
+        let content = "Hello   \nWorld\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1);
+
+        let fix = result[0].fix.as_ref().expect("Should have a fix");
+        assert_eq!(
+            fix.replacement, "",
+            "Fix replacement should always be empty string (remove trailing spaces)"
+        );
+
+        // Also verify via fix() method
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(fixed, "Hello\nWorld\n");
     }
 }

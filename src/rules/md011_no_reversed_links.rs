@@ -24,8 +24,6 @@ enum LinkComponent {
 /// Information about a detected reversed link pattern
 #[derive(Debug, Clone)]
 struct ReversedLinkInfo {
-    line_num: usize,
-    column: usize,
     /// Content found in parentheses
     paren_content: String,
     /// Content found in square brackets
@@ -53,17 +51,6 @@ impl ReversedLinkInfo {
             // Both ambiguous: assume standard reversed pattern (url)[text]
             (Ambiguous, Ambiguous) => (&self.bracket_content, &self.paren_content),
         }
-    }
-
-    /// Get the original pattern as it appears in the source
-    fn original_pattern(&self) -> String {
-        format!("({})[{}]", self.paren_content, self.bracket_content)
-    }
-
-    /// Get the corrected pattern
-    fn corrected_pattern(&self) -> String {
-        let (text, url) = self.correct_order();
-        format!("[{text}]({url})")
     }
 }
 
@@ -95,75 +82,6 @@ impl MD011NoReversedLinks {
 
         // Single word - could be either
         LinkComponent::Ambiguous
-    }
-
-    fn find_reversed_links(content: &str) -> Vec<ReversedLinkInfo> {
-        let mut results = Vec::new();
-        let mut line_num = 1;
-
-        for line in content.lines() {
-            let mut last_end = 0;
-
-            while let Some(cap) = get_cached_regex(REVERSED_LINK_REGEX_STR)
-                .ok()
-                .and_then(|re| re.captures(&line[last_end..]))
-            {
-                let match_obj = cap.get(0).unwrap();
-                let prechar = &cap[1];
-                let paren_content = cap[2].to_string();
-                let bracket_content = cap[3].to_string();
-
-                // Skip wiki-link patterns: if bracket content starts with [ or ends with ]
-                // This handles cases like (url)[[wiki-link]] being misdetected
-                if bracket_content.starts_with('[') || bracket_content.ends_with(']') {
-                    last_end += match_obj.end();
-                    continue;
-                }
-
-                // Skip footnote references: [^footnote]
-                // This prevents false positives like [link](url)[^footnote]
-                if bracket_content.starts_with('^') {
-                    last_end += match_obj.end();
-                    continue;
-                }
-
-                // Check if the brackets at the end are escaped
-                if bracket_content.ends_with('\\') {
-                    last_end += match_obj.end();
-                    continue;
-                }
-
-                // Manual negative lookahead: skip if followed by (
-                // This prevents matching (text)[ref](url) patterns
-                let end_pos = last_end + match_obj.end();
-                if end_pos < line.len() && line[end_pos..].starts_with('(') {
-                    last_end += match_obj.end();
-                    continue;
-                }
-
-                // Classify both components
-                let paren_type = Self::classify_component(&paren_content);
-                let bracket_type = Self::classify_component(&bracket_content);
-
-                // Calculate the actual column (accounting for any prefix character)
-                let column = last_end + match_obj.start() + prechar.len() + 1;
-
-                results.push(ReversedLinkInfo {
-                    line_num,
-                    column,
-                    paren_content,
-                    bracket_content,
-                    paren_type,
-                    bracket_type,
-                });
-
-                last_end += match_obj.end();
-            }
-
-            line_num += 1;
-        }
-
-        results
     }
 }
 
@@ -253,8 +171,6 @@ impl Rule for MD011NoReversedLinks {
                 let bracket_type = Self::classify_component(&bracket_content);
 
                 let info = ReversedLinkInfo {
-                    line_num,
-                    column: match_start + 1,
                     paren_content,
                     bracket_content,
                     paren_type,
@@ -294,45 +210,22 @@ impl Rule for MD011NoReversedLinks {
     }
 
     fn fix(&self, ctx: &crate::lint_context::LintContext) -> Result<String, LintError> {
-        let content = ctx.content;
-        let mut result = content.to_string();
-        let mut offset: isize = 0;
-
-        let line_index = &ctx.line_index;
-
-        for info in Self::find_reversed_links(content) {
-            // Calculate absolute position in original content using LineIndex
-            let line_start = line_index.get_line_start_byte(info.line_num).unwrap_or(0);
-            let pos = line_start + (info.column - 1);
-
-            // Skip if in front matter using centralized utility
-            if ctx.is_in_front_matter(pos) {
-                continue;
-            }
-
-            // Skip if in any skip context
-            if !ctx.is_in_code_block_or_span(pos)
-                && !ctx.is_in_html_comment(pos)
-                && !is_in_math_context(ctx, pos)
-                && !ctx.is_in_jinja_range(pos)
-            {
-                let adjusted_pos = (pos as isize + offset) as usize;
-
-                // Use the info struct to get both original and corrected patterns
-                let original = info.original_pattern();
-                let replacement = info.corrected_pattern();
-
-                // Make sure we have the right substring before replacing
-                let end_pos = adjusted_pos + original.len();
-                if end_pos <= result.len() && adjusted_pos < result.len() {
-                    result.replace_range(adjusted_pos..end_pos, &replacement);
-                    // Update offset based on the difference in lengths
-                    offset += replacement.len() as isize - original.len() as isize;
-                }
-            }
+        let warnings = self.check(ctx)?;
+        if warnings.is_empty() {
+            return Ok(ctx.content.to_string());
         }
 
-        Ok(result)
+        let mut content = ctx.content.to_string();
+        // Apply fixes in reverse order to preserve byte offsets
+        let mut fixes: Vec<_> = warnings.iter().filter_map(|w| w.fix.as_ref()).collect();
+        fixes.sort_by(|a, b| b.range.start.cmp(&a.range.start));
+
+        for fix in fixes {
+            if fix.range.start < content.len() && fix.range.end <= content.len() {
+                content.replace_range(fix.range.clone(), &fix.replacement);
+            }
+        }
+        Ok(content)
     }
 
     fn should_skip(&self, ctx: &crate::lint_context::LintContext) -> bool {
@@ -515,5 +408,64 @@ mod tests {
         let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Obsidian, None);
         let warnings = rule.check(&ctx).unwrap();
         assert_eq!(warnings.len(), 0, "Should skip Dataview field with empty value");
+    }
+
+    #[test]
+    fn test_md011_fix_skips_obsidian_comments() {
+        let rule = MD011NoReversedLinks;
+
+        // Reversed link inside Obsidian comment block should not be modified by fix()
+        let content = "%%\n(http://example.com)[hidden link]\n%%\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Obsidian, None);
+
+        // check() should produce no warnings (Obsidian comment is skipped)
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(warnings.len(), 0, "check() should skip Obsidian comment content");
+
+        // fix() should not modify content inside Obsidian comments
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(
+            fixed, content,
+            "fix() should not modify reversed links inside Obsidian comments"
+        );
+    }
+
+    #[test]
+    fn test_md011_fix_skips_obsidian_comments_with_surrounding_content() {
+        let rule = MD011NoReversedLinks;
+
+        // Mix of Obsidian comment and real reversed link
+        let content = "%%\n(http://example.com)[hidden]\n%%\n\n(http://real.com)[visible]\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Obsidian, None);
+
+        // check() should only flag the visible one
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(warnings.len(), 1, "check() should only flag visible reversed link");
+        assert_eq!(warnings[0].line, 5);
+
+        // fix() should only fix the visible one, leaving comment content untouched
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(
+            fixed, "%%\n(http://example.com)[hidden]\n%%\n\n[visible](http://real.com)\n",
+            "fix() should only modify visible reversed links"
+        );
+    }
+
+    #[test]
+    fn test_md011_fix_skips_dataview_fields_obsidian() {
+        let rule = MD011NoReversedLinks;
+
+        // Dataview inline field should not be modified by fix()
+        let content = "(status:: active)[link text]\n(http://example.com)[real link]\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Obsidian, None);
+
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(warnings.len(), 1, "check() should only flag the real reversed link");
+
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(
+            fixed, "(status:: active)[link text]\n[real link](http://example.com)\n",
+            "fix() should not modify Dataview inline fields"
+        );
     }
 }
