@@ -126,12 +126,23 @@ impl MD072FrontmatterKeySort {
             // Track depth before checking for keys on this line
             let line_start_depth = depth;
 
-            // Count braces and brackets to track nesting
+            // Count braces and brackets to track nesting, skipping those inside strings
+            let mut in_string = false;
+            let mut prev_backslash = false;
             for ch in line.chars() {
-                match ch {
-                    '{' | '[' => depth += 1,
-                    '}' | ']' => depth = depth.saturating_sub(1),
-                    _ => {}
+                if in_string {
+                    if ch == '"' && !prev_backslash {
+                        in_string = false;
+                    }
+                    prev_backslash = ch == '\\' && !prev_backslash;
+                } else {
+                    match ch {
+                        '"' => in_string = true,
+                        '{' | '[' => depth += 1,
+                        '}' | ']' => depth = depth.saturating_sub(1),
+                        _ => {}
+                    }
+                    prev_backslash = false;
                 }
             }
 
@@ -1903,6 +1914,104 @@ mod tests {
 
         // zebra (pos 0), aardvark (pos 1) → sorted according to key_order
         assert!(result.is_empty());
+    }
+
+    // ==================== JSON braces in string values ====================
+
+    #[test]
+    fn test_json_braces_in_string_values_extracts_all_keys() {
+        // Braces inside JSON string values should not affect depth tracking.
+        // The key "author" (on the line after the brace-containing value) must be extracted.
+        // Content is already sorted, so no warnings expected.
+        let rule = create_enabled_rule();
+        let content = "{\n\"author\": \"Someone\",\n\"description\": \"Use { to open\",\n\"tags\": [\"a\"],\n\"title\": \"My Post\"\n}\n\nContent here.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        // If all 4 keys are extracted, they are already sorted: author, description, tags, title
+        assert!(
+            result.is_empty(),
+            "All keys should be extracted and recognized as sorted. Got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_json_braces_in_string_key_after_brace_value_detected() {
+        // Specifically verify that a key appearing AFTER a line with unbalanced braces in a string is extracted
+        let rule = create_enabled_rule();
+        // "description" has an unbalanced `{` in its value
+        // "author" comes on the next line and must be detected as a top-level key
+        let content = "{\n\"description\": \"Use { to open\",\n\"author\": \"Someone\"\n}\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        // author < description alphabetically, but description comes first => unsorted
+        // The warning should mention 'author' should come before 'description'
+        assert_eq!(
+            result.len(),
+            1,
+            "Should detect unsorted keys after brace-containing string value"
+        );
+        assert!(
+            result[0].message.contains("'author' should come before 'description'"),
+            "Should report author before description. Got: {}",
+            result[0].message
+        );
+    }
+
+    #[test]
+    fn test_json_brackets_in_string_values() {
+        // Brackets inside JSON string values should not affect depth tracking
+        let rule = create_enabled_rule();
+        let content = "{\n\"description\": \"My [Post]\",\n\"author\": \"Someone\"\n}\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        // author < description, but description comes first => unsorted
+        assert_eq!(
+            result.len(),
+            1,
+            "Should detect unsorted keys despite brackets in string values"
+        );
+        assert!(
+            result[0].message.contains("'author' should come before 'description'"),
+            "Got: {}",
+            result[0].message
+        );
+    }
+
+    #[test]
+    fn test_json_escaped_quotes_in_values() {
+        // Escaped quotes inside values should not break string tracking
+        let rule = create_enabled_rule();
+        let content = "{\n\"title\": \"He said \\\"hello {world}\\\"\",\n\"author\": \"Someone\"\n}\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        // author < title, title comes first => unsorted
+        assert_eq!(result.len(), 1, "Should handle escaped quotes with braces in values");
+        assert!(
+            result[0].message.contains("'author' should come before 'title'"),
+            "Got: {}",
+            result[0].message
+        );
+    }
+
+    #[test]
+    fn test_json_multiple_braces_in_string() {
+        // Multiple unbalanced braces in string values
+        let rule = create_enabled_rule();
+        let content = "{\n\"pattern\": \"{{{}}\",\n\"author\": \"Someone\"\n}\n\nContent.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+
+        // author < pattern, but pattern comes first => unsorted
+        assert_eq!(result.len(), 1, "Should handle multiple braces in string values");
+        assert!(
+            result[0].message.contains("'author' should come before 'pattern'"),
+            "Got: {}",
+            result[0].message
+        );
     }
 
     #[test]

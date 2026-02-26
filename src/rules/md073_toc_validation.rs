@@ -84,7 +84,66 @@ enum TocMismatch {
 static MARKDOWN_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\([^)]+\)").unwrap());
 static MARKDOWN_REF_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\[[^\]]*\]").unwrap());
 static MARKDOWN_IMAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"!\[([^\]]*)\]\([^)]+\)").unwrap());
-static MARKDOWN_CODE_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").unwrap());
+/// Strip code spans from text, handling multi-backtick spans per CommonMark spec.
+/// E.g., `` `code` ``, ``` ``code with ` backtick`` ```, etc.
+fn strip_code_spans(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '`' {
+            // Count opening backticks
+            let open_start = i;
+            while i < len && chars[i] == '`' {
+                i += 1;
+            }
+            let backtick_count = i - open_start;
+
+            // Find matching closing backticks (same count)
+            let content_start = i;
+            let mut found_close = false;
+            while i < len {
+                if chars[i] == '`' {
+                    let close_start = i;
+                    while i < len && chars[i] == '`' {
+                        i += 1;
+                    }
+                    if i - close_start == backtick_count {
+                        // Found matching close - extract content
+                        let content: String = chars[content_start..close_start].iter().collect();
+                        // CommonMark: strip one leading and one trailing space if both exist
+                        let stripped = if content.starts_with(' ') && content.ends_with(' ') && content.len() > 1 {
+                            &content[1..content.len() - 1]
+                        } else {
+                            &content
+                        };
+                        result.push_str(stripped);
+                        found_close = true;
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            if !found_close {
+                // No matching close found - emit backticks literally
+                for _ in 0..backtick_count {
+                    result.push('`');
+                }
+                let remaining: String = chars[content_start..].iter().collect();
+                result.push_str(&remaining);
+                break;
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    result
+}
 static MARKDOWN_BOLD_ASTERISK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
 static MARKDOWN_BOLD_UNDERSCORE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"__([^_]+)__").unwrap());
 static MARKDOWN_ITALIC_ASTERISK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*([^*]+)\*").unwrap());
@@ -113,8 +172,8 @@ fn strip_markdown_formatting(text: &str) -> String {
     // Strip reference links: [text][ref] → text
     result = MARKDOWN_REF_LINK.replace_all(&result, "$1").to_string();
 
-    // Strip code spans: `code` → code
-    result = MARKDOWN_CODE_SPAN.replace_all(&result, "$1").to_string();
+    // Strip code spans (handles multi-backtick spans like ``code with ` backtick``)
+    result = strip_code_spans(&result);
 
     // Strip bold (do double before single to handle nested)
     result = MARKDOWN_BOLD_ASTERISK.replace_all(&result, "$1").to_string();
@@ -340,20 +399,43 @@ impl MD073TocValidation {
         let expected_anchors: HashMap<&str, &ExpectedTocEntry> =
             expected.iter().map(|e| (e.anchor.as_str(), e)).collect();
 
-        // Build a map of actual anchors
-        let actual_anchors: HashMap<&str, &TocEntry> = actual.iter().map(|e| (e.anchor.as_str(), e)).collect();
-
-        // Check for stale entries (in TOC but not in expected)
+        // Count actual anchors (handles duplicate anchors in TOC)
+        let mut actual_anchor_counts: HashMap<&str, usize> = HashMap::new();
         for entry in actual {
-            if !expected_anchors.contains_key(entry.anchor.as_str()) {
-                mismatches.push(TocMismatch::StaleEntry { entry: entry.clone() });
+            *actual_anchor_counts.entry(entry.anchor.as_str()).or_insert(0) += 1;
+        }
+
+        // Count expected anchors
+        let mut expected_anchor_counts: HashMap<&str, usize> = HashMap::new();
+        for exp in expected {
+            *expected_anchor_counts.entry(exp.anchor.as_str()).or_insert(0) += 1;
+        }
+
+        // Check for stale entries (in TOC but not in expected, accounting for counts)
+        let mut stale_anchor_counts: HashMap<&str, usize> = HashMap::new();
+        for entry in actual {
+            let actual_count = actual_anchor_counts.get(entry.anchor.as_str()).copied().unwrap_or(0);
+            let expected_count = expected_anchor_counts.get(entry.anchor.as_str()).copied().unwrap_or(0);
+            if actual_count > expected_count {
+                let reported = stale_anchor_counts.entry(entry.anchor.as_str()).or_insert(0);
+                if *reported < actual_count - expected_count {
+                    *reported += 1;
+                    mismatches.push(TocMismatch::StaleEntry { entry: entry.clone() });
+                }
             }
         }
 
-        // Check for missing entries (in expected but not in TOC)
+        // Check for missing entries (in expected but not in TOC, accounting for counts)
+        let mut missing_anchor_counts: HashMap<&str, usize> = HashMap::new();
         for exp in expected {
-            if !actual_anchors.contains_key(exp.anchor.as_str()) {
-                mismatches.push(TocMismatch::MissingEntry { expected: exp.clone() });
+            let actual_count = actual_anchor_counts.get(exp.anchor.as_str()).copied().unwrap_or(0);
+            let expected_count = expected_anchor_counts.get(exp.anchor.as_str()).copied().unwrap_or(0);
+            if expected_count > actual_count {
+                let reported = missing_anchor_counts.entry(exp.anchor.as_str()).or_insert(0);
+                if *reported < expected_count - actual_count {
+                    *reported += 1;
+                    mismatches.push(TocMismatch::MissingEntry { expected: exp.clone() });
+                }
             }
         }
 
@@ -1868,6 +1950,96 @@ Content.
         assert!(fixed.contains("- [Level 2 D](#level-2-d)"));
         assert!(fixed.contains("  - [Level 3 D](#level-3-d)"));
         assert!(fixed.contains("    - [Level 4 D](#level-4-d)"));
+    }
+
+    // ==================== Duplicate TOC anchors ====================
+
+    #[test]
+    fn test_duplicate_toc_anchors_produce_correct_diagnostics() {
+        let rule = create_enabled_rule();
+        // Document has headings "Example", "Another", "Example" which produce anchors:
+        // "example", "another", "example-1"
+        // TOC incorrectly uses #example twice instead of #example and #example-1
+        let content = r#"# Document
+
+<!-- toc -->
+
+- [Example](#example)
+- [Another](#another)
+- [Example](#example)
+
+<!-- tocstop -->
+
+## Example
+First.
+
+## Another
+Middle.
+
+## Example
+Second.
+"#;
+        let ctx = create_ctx(content);
+        let result = rule.check(&ctx).unwrap();
+
+        // The TOC has #example twice but expected has #example and #example-1.
+        // Should report that #example-1 is missing from the TOC.
+        assert!(!result.is_empty(), "Should detect mismatch with duplicate TOC anchors");
+        assert!(
+            result[0].message.contains("Missing entry") || result[0].message.contains("Stale entry"),
+            "Should report missing or stale entries for duplicate anchors. Got: {}",
+            result[0].message
+        );
+    }
+
+    // ==================== Multi-backtick code spans ====================
+
+    #[test]
+    fn test_strip_double_backtick_code_span() {
+        // Double-backtick code spans should be stripped
+        let result = strip_markdown_formatting("Using ``code with ` backtick``");
+        assert_eq!(
+            result, "Using code with ` backtick",
+            "Should strip double-backtick code spans"
+        );
+    }
+
+    #[test]
+    fn test_strip_triple_backtick_code_span() {
+        // Triple-backtick code spans should be stripped
+        let result = strip_markdown_formatting("Using ```code with `` backticks```");
+        assert_eq!(
+            result, "Using code with `` backticks",
+            "Should strip triple-backtick code spans"
+        );
+    }
+
+    #[test]
+    fn test_toc_with_double_backtick_heading() {
+        let rule = create_enabled_rule();
+        let content = r#"# Title
+
+<!-- toc -->
+
+- [Using code with backtick](#using-code-with-backtick)
+
+<!-- tocstop -->
+
+## Using ``code with ` backtick``
+
+Content here.
+"#;
+        let ctx = create_ctx(content);
+        // The heading uses double-backtick code span: ``code with ` backtick``
+        // After stripping, heading text = "Using code with ` backtick"
+        // The fix should produce a TOC entry with the stripped text
+        let fixed = rule.fix(&ctx).unwrap();
+        // The generated TOC should have the stripped heading text
+        assert!(
+            fixed.contains("code with ` backtick") || fixed.contains("code with backtick"),
+            "Fix should strip double-backtick code span from heading. Got TOC: {}",
+            &fixed[fixed.find("<!-- toc -->").unwrap()..fixed.find("<!-- tocstop -->").unwrap()]
+        );
     }
 
     #[test]

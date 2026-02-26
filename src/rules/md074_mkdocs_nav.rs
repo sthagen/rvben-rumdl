@@ -7,16 +7,17 @@ use crate::rule::{LintError, LintResult, LintWarning, Rule, RuleCategory, Severi
 use crate::rule_config_serde::RuleConfig;
 use crate::utils::mkdocs_config::find_mkdocs_yml;
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 mod md074_config;
 pub use md074_config::{MD074Config, NavValidation};
 
-/// Cache to track which mkdocs.yml files have been validated in this session.
-/// Prevents redundant validation when checking multiple files in the same project.
-static VALIDATED_PROJECTS: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+/// Cache mapping mkdocs.yml paths to content hashes.
+/// Re-validates when file content changes (self-invalidating for LSP mode).
+static VALIDATED_PROJECTS: LazyLock<Mutex<HashMap<PathBuf, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Rule MD074: MkDocs nav validation
 ///
@@ -44,7 +45,7 @@ impl MD074MkDocsNav {
         Self { config }
     }
 
-    /// Clear the validation cache. Useful for testing.
+    /// Clear the validation cache.
     #[cfg(test)]
     pub fn clear_cache() {
         if let Ok(mut cache) = VALIDATED_PROJECTS.lock() {
@@ -52,11 +53,17 @@ impl MD074MkDocsNav {
         }
     }
 
-    /// Parse mkdocs.yml and extract configuration
+    /// Parse mkdocs.yml and extract configuration (reads from disk).
+    /// Used by tests that need to parse without going through `check()`.
+    #[cfg(test)]
     fn parse_mkdocs_yml(path: &Path) -> Result<MkDocsConfig, String> {
         let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+        Self::parse_mkdocs_yml_from_str(&content, path)
+    }
 
-        serde_yml::from_str(&content).map_err(|e| format!("Failed to parse {}: {e}", path.display()))
+    /// Parse mkdocs.yml from already-read content
+    fn parse_mkdocs_yml_from_str(content: &str, path: &Path) -> Result<MkDocsConfig, String> {
+        serde_yml::from_str(content).map_err(|e| format!("Failed to parse {}: {e}", path.display()))
     }
 
     /// Recursively extract all file paths from nav structure
@@ -443,22 +450,42 @@ impl Rule for MD074MkDocsNav {
             return Ok(Vec::new());
         };
 
-        // Check if we've already validated this mkdocs.yml in this session
-        // This prevents duplicate warnings when checking multiple files in the same project
-        if let Ok(mut cache) = VALIDATED_PROJECTS.lock() {
-            // Use insert() return value to atomically check-and-insert (avoids TOCTOU race)
-            if !cache.insert(mkdocs_path.clone()) {
-                // Already validated, skip
-                return Ok(Vec::new());
+        // Read mkdocs.yml content and compute hash for cache invalidation
+        let mkdocs_content = match std::fs::read_to_string(&mkdocs_path) {
+            Ok(content) => content,
+            Err(e) => {
+                return Ok(vec![LintWarning {
+                    rule_name: Some(self.name().to_string()),
+                    line: 1,
+                    column: 1,
+                    end_line: 1,
+                    end_column: 1,
+                    message: format!("Failed to read {}: {e}", mkdocs_path.display()),
+                    severity: Severity::Warning,
+                    fix: None,
+                }]);
             }
+        };
+
+        let mut hasher = DefaultHasher::new();
+        mkdocs_content.hash(&mut hasher);
+        let content_hash = hasher.finish();
+
+        // Check if we've already validated this exact version of mkdocs.yml
+        if let Ok(mut cache) = VALIDATED_PROJECTS.lock() {
+            if let Some(&cached_hash) = cache.get(&mkdocs_path) {
+                if cached_hash == content_hash {
+                    return Ok(Vec::new());
+                }
+            }
+            cache.insert(mkdocs_path.clone(), content_hash);
         }
         // If lock is poisoned, continue with validation (just without caching)
 
-        // Parse mkdocs.yml
-        let mkdocs_config = match Self::parse_mkdocs_yml(&mkdocs_path) {
+        // Parse mkdocs.yml from already-read content
+        let mkdocs_config = match Self::parse_mkdocs_yml_from_str(&mkdocs_content, &mkdocs_path) {
             Ok(config) => config,
             Err(e) => {
-                // Return a warning about the parse failure instead of silently failing
                 return Ok(vec![LintWarning {
                     rule_name: Some(self.name().to_string()),
                     line: 1,
@@ -915,6 +942,62 @@ nav:
         );
         let result2 = rule.check(&ctx2).unwrap();
         assert!(result2.is_empty(), "Second check should return no warnings (cached)");
+    }
+
+    #[test]
+    fn test_cache_invalidates_when_content_changes() {
+        setup_test();
+        let temp_dir = tempdir().unwrap();
+
+        let mkdocs_content_v1 = r#"
+site_name: Test
+docs_dir: docs
+nav:
+  - Home: index.md
+"#;
+        fs::write(temp_dir.path().join("mkdocs.yml"), mkdocs_content_v1).unwrap();
+
+        let docs_dir = temp_dir.path().join("docs");
+        fs::create_dir_all(&docs_dir).unwrap();
+        fs::write(docs_dir.join("index.md"), "# Home").unwrap();
+
+        let rule = MD074MkDocsNav::new();
+
+        // First check - valid config, no warnings
+        let ctx1 = crate::lint_context::LintContext::new(
+            "# Home",
+            crate::config::MarkdownFlavor::MkDocs,
+            Some(docs_dir.join("index.md")),
+        );
+        let result1 = rule.check(&ctx1).unwrap();
+        assert!(
+            result1.is_empty(),
+            "First check: valid config should produce no warnings"
+        );
+
+        // Now modify mkdocs.yml to add a missing file reference
+        let mkdocs_content_v2 = r#"
+site_name: Test
+docs_dir: docs
+nav:
+  - Home: index.md
+  - Missing: missing.md
+"#;
+        fs::write(temp_dir.path().join("mkdocs.yml"), mkdocs_content_v2).unwrap();
+
+        // Second check - content changed, cache should invalidate
+        let ctx2 = crate::lint_context::LintContext::new(
+            "# Home",
+            crate::config::MarkdownFlavor::MkDocs,
+            Some(docs_dir.join("index.md")),
+        );
+        let result2 = rule.check(&ctx2).unwrap();
+        assert_eq!(
+            result2.len(),
+            1,
+            "Second check: changed mkdocs.yml should re-validate and find missing.md"
+        );
+        assert!(result2[0].message.contains("missing.md"));
     }
 
     #[test]
