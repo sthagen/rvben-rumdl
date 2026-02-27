@@ -27,6 +27,7 @@ jobs:
         uses: jdx/mise-action@v2
         with:
           experimental: true
+          install: false
 
       - name: Install mise tools
         run: |

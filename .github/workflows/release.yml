@@ -47,7 +47,7 @@ jobs:
       - uses: jdx/mise-action@v2
         with:
           experimental: true
-          install: true
+          install: false
 
       - name: Install mise tools
         run: |
@@ -110,7 +110,7 @@ jobs:
         with:
           version: 2025.8.18
           experimental: false  # Use stable releases only
-          install: true
+          install: false
 
       # Install only build-required tools (skip uv, nextest, watch, etc.)
       - name: Install mise tools
@@ -246,7 +246,7 @@ jobs:
       - uses: jdx/mise-action@v2
         with:
           experimental: true
-          install: true
+          install: false
       - name: Install mise tools
         run: |
           for attempt in 1 2 3; do
@@ -549,6 +549,15 @@ jobs:
       - uses: jdx/mise-action@v2
         with:
           experimental: true
+          install: false
+
+      - name: Install mise tools
+        run: |
+          for attempt in 1 2 3; do
+            mise install --yes && break
+            echo "Attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
 
       - name: Publish to crates.io
         if: ${{ inputs.dry_run != true && inputs.skip_crates_io != true }}
