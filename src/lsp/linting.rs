@@ -125,6 +125,14 @@ impl RumdlLanguageServer {
         // Apply LSP config overrides (select_rules, ignore_rules from VSCode settings)
         filtered_rules = self.apply_lsp_config_overrides(filtered_rules, &lsp_config);
 
+        // Apply per-file-ignores filtering
+        if let Some(ref path) = file_path {
+            let ignored = rumdl_config.get_ignored_rules_for_file(path);
+            if !ignored.is_empty() {
+                filtered_rules.retain(|rule| !ignored.contains(rule.name()));
+            }
+        }
+
         // Run rumdl linting with the configured flavor
         let mut all_warnings = match crate::lint(text, &filtered_rules, false, flavor, Some(&rumdl_config)) {
             Ok(warnings) => warnings,
@@ -255,6 +263,14 @@ impl RumdlLanguageServer {
 
         // Apply LSP config overrides (select_rules, ignore_rules from VSCode settings)
         filtered_rules = self.apply_lsp_config_overrides(filtered_rules, &lsp_config);
+
+        // Apply per-file-ignores filtering
+        if let Some(ref path) = file_path {
+            let ignored = rumdl_config.get_ignored_rules_for_file(path);
+            if !ignored.is_empty() {
+                filtered_rules.retain(|rule| !ignored.contains(rule.name()));
+            }
+        }
 
         // First, run lint to get active warnings (respecting ignore comments)
         // This tells us which rules actually have unfixed issues
@@ -409,6 +425,14 @@ impl RumdlLanguageServer {
 
         // Apply LSP config overrides (select_rules, ignore_rules from VSCode settings)
         filtered_rules = self.apply_lsp_config_overrides(filtered_rules, &lsp_config);
+
+        // Apply per-file-ignores filtering
+        if let Some(ref path) = file_path {
+            let ignored = rumdl_config.get_ignored_rules_for_file(path);
+            if !ignored.is_empty() {
+                filtered_rules.retain(|rule| !ignored.contains(rule.name()));
+            }
+        }
 
         // Extract MD013 config once so the "Reflow paragraph" action respects user settings.
         let mut md013_config = crate::rule_config_serde::load_rule_config::<MD013Config>(&rumdl_config);

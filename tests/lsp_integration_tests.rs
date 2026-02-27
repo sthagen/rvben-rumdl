@@ -4,6 +4,7 @@
 //! mirror how editors like VS Code, Neovim, etc. would interact with rumdl.
 
 use rumdl_lib::lsp::types::{RumdlLspConfig, warning_to_diagnostic};
+use std::path::Path;
 use std::time::Duration;
 
 /// Test the core LSP workflow without full server setup
@@ -269,6 +270,105 @@ async fn test_workspace_scenarios() {
     }
 
     println!("Workspace total: {total_warnings} warnings across {file_count} files");
+}
+
+/// Test that per-file-ignores config filters rules in LSP linting path
+///
+/// This mirrors the LSP linting flow: resolve config, get all rules,
+/// filter_rules (global), apply_lsp_config_overrides, then per-file-ignores.
+/// Verifies that a file matching a per-file-ignores pattern has the specified
+/// rules suppressed, while a non-matching file still gets those rules applied.
+#[tokio::test]
+async fn test_per_file_ignores_in_lsp_linting_path() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config_path = temp_dir.path().join(".rumdl.toml");
+
+    // Config: ignore MD033 for README.md, ignore MD013 for docs/**
+    let config_content = r#"
+[per-file-ignores]
+"README.md" = ["MD033"]
+"docs/**" = ["MD013"]
+"#;
+    std::fs::write(&config_path, config_content).unwrap();
+
+    let sourced = rumdl_lib::config::SourcedConfig::load(Some(config_path.to_str().unwrap()), None).unwrap();
+    let config: rumdl_lib::config::Config = sourced.into_validated_unchecked().into();
+
+    let all_rules = rumdl_lib::rules::all_rules(&config);
+
+    // Simulate the LSP filtering pipeline for README.md
+    let mut readme_rules = rumdl_lib::rules::filter_rules(&all_rules, &config.global);
+    let ignored = config.get_ignored_rules_for_file(Path::new("README.md"));
+    if !ignored.is_empty() {
+        readme_rules.retain(|rule| !ignored.contains(rule.name()));
+    }
+
+    // MD033 should be excluded for README.md
+    assert!(
+        !readme_rules.iter().any(|r| r.name() == "MD033"),
+        "MD033 should be ignored for README.md"
+    );
+
+    // Lint README.md content with HTML - should NOT trigger MD033
+    let readme_content = "# Test\n\n<div>HTML content</div>\n";
+    let readme_warnings = rumdl_lib::lint(
+        readme_content,
+        &readme_rules,
+        false,
+        rumdl_lib::config::MarkdownFlavor::Standard,
+        Some(&config),
+    )
+    .unwrap();
+    assert!(
+        !readme_warnings.iter().any(|w| w.rule_name.as_deref() == Some("MD033")),
+        "README.md should not have MD033 warnings due to per-file-ignores"
+    );
+
+    // Simulate the LSP filtering pipeline for other.md (no per-file-ignores match)
+    let mut other_rules = rumdl_lib::rules::filter_rules(&all_rules, &config.global);
+    let ignored_other = config.get_ignored_rules_for_file(Path::new("other.md"));
+    if !ignored_other.is_empty() {
+        other_rules.retain(|rule| !ignored_other.contains(rule.name()));
+    }
+
+    // MD033 should still be present for other.md
+    assert!(
+        other_rules.iter().any(|r| r.name() == "MD033"),
+        "MD033 should NOT be ignored for other.md"
+    );
+
+    // Lint other.md with same content - SHOULD trigger MD033
+    let other_warnings = rumdl_lib::lint(
+        readme_content,
+        &other_rules,
+        false,
+        rumdl_lib::config::MarkdownFlavor::Standard,
+        Some(&config),
+    )
+    .unwrap();
+    assert!(
+        other_warnings.iter().any(|w| w.rule_name.as_deref() == Some("MD033")),
+        "other.md should have MD033 warnings (not in per-file-ignores)"
+    );
+
+    // Simulate the LSP filtering pipeline for docs/api.md
+    let mut docs_rules = rumdl_lib::rules::filter_rules(&all_rules, &config.global);
+    let ignored_docs = config.get_ignored_rules_for_file(Path::new("docs/api.md"));
+    if !ignored_docs.is_empty() {
+        docs_rules.retain(|rule| !ignored_docs.contains(rule.name()));
+    }
+
+    // MD013 should be excluded for docs/api.md
+    assert!(
+        !docs_rules.iter().any(|r| r.name() == "MD013"),
+        "MD013 should be ignored for docs/api.md"
+    );
+
+    // But MD013 should still apply to README.md
+    assert!(
+        readme_rules.iter().any(|r| r.name() == "MD013"),
+        "MD013 should NOT be ignored for README.md"
+    );
 }
 
 /// Test that diagnostic conversion preserves all necessary information
