@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-02-27
+
+### Fixed
+
+- **MD013**: Respect MkDocs 4-space list continuation indent during reflow. For
+  markers shorter than 4 characters (e.g., `1.`, `-`), continuation lines are now
+  indented to 4 spaces in MkDocs flavor, matching Python-Markdown requirements. This
+  fixes an MD077/MD013 conflict loop where reflow produced invalid MkDocs markdown
+  ([#471](https://github.com/rvben/rumdl/issues/471))
+- **LSP**: Apply per-file-ignores configuration during LSP linting
+- **CI**: Move mise tool install into retry loops for reliability
+
+### Changed
+
+- **MD046**: Expanded documentation with examples and details for unclosed code block
+  detection (thanks @eread in [#470](https://github.com/rvben/rumdl/pull/470))
+
 ## [0.1.31] - 2026-02-27
 
 ### Fixed
