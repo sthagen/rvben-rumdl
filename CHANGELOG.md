@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.31] - 2026-02-27
+
+### Fixed
+
+- **MD013**: Handle MkDocs admonitions inside list items during reflow. Admonition
+  headers and body content are now preserved and reflowed correctly instead of being
+  treated as plain paragraph text. Body indent is derived from actual content lines
+  rather than hardcoded, supporting nested admonitions
+  ([#469](https://github.com/rvben/rumdl/issues/469))
+
 ## [0.1.30] - 2026-02-26
 
 ### Added
