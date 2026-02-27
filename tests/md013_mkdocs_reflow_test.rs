@@ -555,3 +555,210 @@ fn test_compact_admonition_multi_paragraph_preserved() {
         "Blank line between admonition paragraphs should be preserved. Got:\n{fixed}"
     );
 }
+
+// ── Issue #471: List continuation indent must respect MkDocs 4-space minimum ──
+
+#[test]
+fn test_mkdocs_ordered_list_continuation_uses_4_space_indent() {
+    // MkDocs requires 4-space indent for list continuation content.
+    // For "1. " (3-char marker), continuation indent must be bumped to 4.
+    let content = "# Heading\n\n1. Update the answers to previous questions\n\n    Questions can be reanswered to fit the latest requirements of the generated projects. This is helpful, especially when the template includes optional tools that fit into different phases of a project. In that case, template consumers are able to activate the optional tools gradually when the project matures.\n";
+
+    let mut config = create_mkdocs_config_with_reflow();
+    config.global.line_length = rumdl_lib::types::LineLength::new(88);
+    let rule = MD013LineLength::from_config(&config);
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+
+    let fixed = rule.fix(&ctx).unwrap();
+    let lines: Vec<&str> = fixed.lines().collect();
+
+    // All continuation lines (after the blank line) must have 4-space indent
+    for (i, line) in lines.iter().enumerate() {
+        if i >= 4 && !line.is_empty() {
+            assert!(
+                line.starts_with("    "),
+                "Line {} should have 4-space indent in MkDocs flavor, got: {:?}",
+                i + 1,
+                line
+            );
+        }
+    }
+
+    // No line should exceed 88 characters
+    for (i, line) in lines.iter().enumerate() {
+        assert!(
+            line.len() <= 88,
+            "Line {} exceeds 88 chars (len={}): {:?}",
+            i + 1,
+            line.len(),
+            line
+        );
+    }
+}
+
+#[test]
+fn test_mkdocs_ordered_list_reflow_is_idempotent() {
+    // After reflowing, running fix again should produce identical output
+    let content = "1. First item\n\n    Questions can be reanswered to fit the latest requirements of the generated projects. This is helpful, especially when the template includes optional tools that fit into different phases of a project.\n";
+
+    let mut config = create_mkdocs_config_with_reflow();
+    config.global.line_length = rumdl_lib::types::LineLength::new(88);
+    let rule = MD013LineLength::from_config(&config);
+
+    // First pass
+    let ctx1 = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+    let fixed1 = rule.fix(&ctx1).unwrap();
+
+    // Second pass on the already-fixed content
+    let ctx2 = LintContext::new(&fixed1, MarkdownFlavor::MkDocs, None);
+    let warnings = rule.check(&ctx2).unwrap();
+
+    assert!(
+        warnings.is_empty(),
+        "Reflowed output should not trigger further warnings. Got {} warnings on:\n{}",
+        warnings.len(),
+        fixed1
+    );
+}
+
+#[test]
+fn test_mkdocs_bullet_list_continuation_uses_4_space_indent() {
+    // Bullet marker "- " is 2 chars, but MkDocs requires at least 4 for continuation
+    let content = "- Questions can be reanswered to fit the latest requirements of the generated projects. This is helpful, especially when the template includes optional tools.\n";
+
+    let mut config = create_mkdocs_config_with_reflow();
+    config.global.line_length = rumdl_lib::types::LineLength::new(88);
+    let rule = MD013LineLength::from_config(&config);
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+
+    let fixed = rule.fix(&ctx).unwrap();
+    let lines: Vec<&str> = fixed.lines().collect();
+
+    // Continuation lines must have 4-space indent
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        if !line.is_empty() {
+            assert!(
+                line.starts_with("    "),
+                "Line {} should have 4-space indent for bullet list in MkDocs, got: {:?}",
+                i + 1,
+                line
+            );
+        }
+    }
+
+    // No line exceeds limit
+    for (i, line) in lines.iter().enumerate() {
+        assert!(
+            line.len() <= 88,
+            "Line {} exceeds 88 chars (len={}): {:?}",
+            i + 1,
+            line.len(),
+            line
+        );
+    }
+}
+
+#[test]
+fn test_mkdocs_multi_digit_list_marker_keeps_natural_indent() {
+    // "10. " is already 4 chars, so .max(4) doesn't change anything
+    let content = "10. Questions can be reanswered to fit the latest requirements of the generated projects. This is helpful, especially when the template includes optional tools.\n";
+
+    let mut config = create_mkdocs_config_with_reflow();
+    config.global.line_length = rumdl_lib::types::LineLength::new(88);
+    let rule = MD013LineLength::from_config(&config);
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+
+    let fixed = rule.fix(&ctx).unwrap();
+    let lines: Vec<&str> = fixed.lines().collect();
+
+    // Continuation lines must have 4-space indent (same as marker width)
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        if !line.is_empty() {
+            assert!(
+                line.starts_with("    "),
+                "Line {} should have 4-space indent for 10. marker in MkDocs, got: {:?}",
+                i + 1,
+                line
+            );
+        }
+    }
+}
+
+#[test]
+fn test_standard_flavor_ordered_list_uses_marker_width_indent() {
+    // Standard flavor should NOT apply 4-space minimum; "1. " = 3 chars = 3-space indent
+    let content = "1. Questions can be reanswered to fit the latest requirements of the generated projects. This is helpful, especially when the template includes optional tools.\n";
+
+    let mut config = Config::default();
+    config.global.line_length = rumdl_lib::types::LineLength::new(88);
+    if let Some(rule_config) = config.rules.get_mut("MD013") {
+        rule_config
+            .values
+            .insert("reflow".to_string(), toml::Value::Boolean(true));
+    } else {
+        let mut rule_config = rumdl_lib::config::RuleConfig::default();
+        rule_config
+            .values
+            .insert("reflow".to_string(), toml::Value::Boolean(true));
+        config.rules.insert("MD013".to_string(), rule_config);
+    }
+    let rule = MD013LineLength::from_config(&config);
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+
+    let fixed = rule.fix(&ctx).unwrap();
+    let lines: Vec<&str> = fixed.lines().collect();
+
+    // Standard flavor: continuation lines should use 3-space indent (marker width)
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        if !line.is_empty() {
+            assert!(
+                line.starts_with("   ") && !line.starts_with("    "),
+                "Line {} in standard flavor should have exactly 3-space indent, got: {:?}",
+                i + 1,
+                line
+            );
+        }
+    }
+}
+
+#[test]
+fn test_mkdocs_list_continuation_paragraph_after_blank_line() {
+    // The exact scenario from issue #471: continuation paragraph after blank line
+    let content = "\
+# Heading
+
+1. Update the answers to previous questions
+
+    Questions can be reanswered to fit the latest requirements of the generated projects. This is helpful, especially when the template includes optional tools that fit into different phases of a project. In that case, template consumers are able to activate the optional tools gradually when the project matures.
+";
+
+    let mut config = create_mkdocs_config_with_reflow();
+    config.global.line_length = rumdl_lib::types::LineLength::new(88);
+    let rule = MD013LineLength::from_config(&config);
+    let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+
+    let fixed = rule.fix(&ctx).unwrap();
+
+    // Verify no MD013/MD077 conflict: check that the fixed output is clean
+    let ctx2 = LintContext::new(&fixed, MarkdownFlavor::MkDocs, None);
+    let warnings = rule.check(&ctx2).unwrap();
+    assert!(
+        warnings.is_empty(),
+        "Fixed output should not trigger MD013 warnings. Got {} warnings on:\n{}",
+        warnings.len(),
+        fixed
+    );
+
+    // Verify Python-Markdown compatibility: all continuation lines have 4-space indent
+    let lines: Vec<&str> = fixed.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if i >= 4 && !line.is_empty() {
+            assert!(
+                line.starts_with("    "),
+                "Continuation line {} should have 4-space indent for valid MkDocs markdown, got: {:?}",
+                i + 1,
+                line
+            );
+        }
+    }
+}

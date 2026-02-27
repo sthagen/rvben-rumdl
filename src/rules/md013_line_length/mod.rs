@@ -1004,6 +1004,13 @@ impl MD013LineLength {
                 let (marker, first_content) = extract_list_marker_and_content(lines[i]);
                 let marker_len = marker.len();
 
+                // MkDocs flavor requires at least 4 spaces for list continuation
+                let min_continuation_indent = if ctx.flavor.requires_strict_list_indent() {
+                    marker_len.max(4)
+                } else {
+                    marker_len
+                };
+
                 // Track lines and their types (content, code block, fence, nested list)
                 #[derive(Clone)]
                 enum LineType {
@@ -1032,7 +1039,7 @@ impl MD013LineLength {
                             let next_info = &ctx.lines[i + 1];
 
                             // Check if next line is indented enough to be continuation
-                            if !next_info.is_blank && next_info.indent >= marker_len {
+                            if !next_info.is_blank && next_info.indent >= min_continuation_indent {
                                 // This blank line is between paragraphs/blocks in the list item
                                 list_item_lines.push(LineType::Empty);
                                 i += 1;
@@ -1046,8 +1053,8 @@ impl MD013LineLength {
                     // Use pre-computed indent from ctx
                     let indent = line_info.indent;
 
-                    // Valid continuation must be indented at least marker_len
-                    if indent >= marker_len {
+                    // Valid continuation must be indented at least min_continuation_indent
+                    if indent >= min_continuation_indent {
                         let trimmed = line_info.content(ctx.content).trim();
 
                         // Use pre-computed in_code_block from ctx
@@ -1113,8 +1120,8 @@ impl MD013LineLength {
                             continue;
                         }
 
-                        // Normal continuation: marker_len to marker_len+3
-                        if indent <= marker_len + 3 {
+                        // Normal continuation vs indented code block
+                        if indent <= min_continuation_indent + 3 {
                             // Extract content (remove indentation and trailing whitespace)
                             // Preserve hard breaks (2 trailing spaces) while removing excessive whitespace
                             // See: https://github.com/rvben/rumdl/issues/76
@@ -1143,7 +1150,7 @@ impl MD013LineLength {
                             }
                             i += 1;
                         } else {
-                            // indent >= marker_len + 4: indented code block
+                            // indent >= min_continuation_indent + 4: indented code block
                             list_item_lines.push(LineType::CodeBlock(
                                 line_info.content(ctx.content)[indent..].to_string(),
                                 indent,
@@ -1156,7 +1163,7 @@ impl MD013LineLength {
                     }
                 }
 
-                let indent_size = marker_len;
+                let indent_size = min_continuation_indent;
                 let expected_indent = " ".repeat(indent_size);
 
                 // Split list_item_lines into blocks (paragraphs, code blocks, nested lists, semantic lines, and HTML blocks)
@@ -1787,7 +1794,7 @@ impl MD013LineLength {
                                     return false;
                                 }
                                 let joined = para_lines.join(" ");
-                                let with_marker = format!("{}{}", " ".repeat(marker_len), joined.trim());
+                                let with_marker = format!("{}{}", " ".repeat(indent_size), joined.trim());
                                 self.calculate_effective_length(&with_marker) > config.line_length.get()
                             }
                             Block::Admonition {
@@ -2279,7 +2286,7 @@ impl MD013LineLength {
                                                 return None;
                                             }
                                             let joined = para_lines.join(" ");
-                                            let with_indent = format!("{}{}", " ".repeat(marker_len), joined.trim());
+                                            let with_indent = format!("{}{}", " ".repeat(indent_size), joined.trim());
                                             Some(self.calculate_effective_length(&with_indent))
                                         } else {
                                             None
