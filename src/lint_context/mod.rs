@@ -111,7 +111,7 @@ impl<'a> LintContext<'a> {
         let front_matter_end = FrontMatterUtils::get_front_matter_end_line(content);
 
         // Detect code blocks and code spans once and cache them
-        let (code_blocks, code_span_ranges) = profile_section!(
+        let (mut code_blocks, code_span_ranges) = profile_section!(
             "Code blocks",
             profile,
             CodeBlockUtils::detect_code_blocks_and_spans(content)
@@ -200,6 +200,40 @@ impl<'a> LintContext<'a> {
             profile,
             flavor_detection::detect_mkdocs_line_info(&content_lines, &mut lines, flavor)
         );
+
+        // Filter code_blocks to remove false positives from MkDocs admonition/tab content.
+        // pulldown-cmark treats 4-space-indented content as indented code blocks, but inside
+        // MkDocs admonitions and content tabs this is regular markdown content.
+        // detect_mkdocs_line_info already corrected LineInfo.in_code_block for these lines,
+        // but the code_blocks byte ranges are still stale. We split ranges rather than using
+        // all-or-nothing removal, so fenced code blocks within admonitions are preserved.
+        if flavor == MarkdownFlavor::MkDocs {
+            let mut new_code_blocks = Vec::with_capacity(code_blocks.len());
+            for &(start, end) in &code_blocks {
+                let start_line = line_offsets
+                    .partition_point(|&offset| offset <= start)
+                    .saturating_sub(1);
+                let end_line = line_offsets.partition_point(|&offset| offset < end).min(lines.len());
+
+                // Walk lines in this range, collecting sub-ranges where in_code_block is true
+                let mut sub_start: Option<usize> = None;
+                for i in start_line..end_line {
+                    let is_real_code = lines.get(i).is_some_and(|info| info.in_code_block);
+                    if is_real_code && sub_start.is_none() {
+                        let byte_start = if i == start_line { start } else { line_offsets[i] };
+                        sub_start = Some(byte_start);
+                    } else if !is_real_code && sub_start.is_some() {
+                        let byte_end = line_offsets[i];
+                        new_code_blocks.push((sub_start.unwrap(), byte_end));
+                        sub_start = None;
+                    }
+                }
+                if let Some(s) = sub_start {
+                    new_code_blocks.push((s, end));
+                }
+            }
+            code_blocks = new_code_blocks;
+        }
 
         // Detect kramdown constructs (extension blocks, IALs, ALDs) in kramdown flavor
         profile_section!(

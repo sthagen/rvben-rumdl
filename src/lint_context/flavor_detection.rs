@@ -233,6 +233,9 @@ pub(super) fn detect_mkdocs_line_info(content_lines: &[&str], lines: &mut [LineI
             in_admonition = true;
             admonition_indent = mkdocs_admonitions::get_admonition_indent(line).unwrap_or(0);
             lines[i].in_admonition = true;
+            // Nested admonition start lines (indented 4+ spaces) are misclassified as
+            // indented code blocks by pulldown-cmark. Clear that flag.
+            lines[i].in_code_block = false;
             // Reset fenced code tracking when entering new admonition
             in_admonition_fenced_code = false;
             admonition_fence_marker = None;

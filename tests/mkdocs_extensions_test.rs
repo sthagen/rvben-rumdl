@@ -4324,3 +4324,182 @@ $E = mc^2$\n\n\
         );
     }
 }
+
+// =============================================================================
+// MD051: Link fragment detection inside MkDocs admonitions and content tabs
+// Issue #464: pulldown-cmark treats 4-space-indented admonition/tab content as
+// indented code blocks, causing parse_links to miss links entirely.
+// =============================================================================
+
+mod md051_admonition_link_detection {
+    use super::*;
+
+    #[test]
+    fn test_broken_link_inside_admonition_is_detected() {
+        let content = "# Test\n\n## One\n\n!!! note\n\n    See [two](#two)\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link '#two' inside admonition"
+        );
+    }
+
+    #[test]
+    fn test_valid_link_inside_admonition_no_warning() {
+        let content = "# Test\n\n## One\n\n!!! note\n\n    See [one](#one)\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            md051.is_empty(),
+            "MD051 should not flag valid link '#one' inside admonition: {md051:?}"
+        );
+    }
+
+    #[test]
+    fn test_broken_link_inside_content_tab_is_detected() {
+        let content = "# Test\n\n## One\n\n=== \"Tab 1\"\n\n    See [two](#two)\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link '#two' inside content tab"
+        );
+    }
+
+    #[test]
+    fn test_valid_link_inside_content_tab_no_warning() {
+        let content = "# Test\n\n## One\n\n=== \"Tab 1\"\n\n    See [one](#one)\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            md051.is_empty(),
+            "MD051 should not flag valid link '#one' inside content tab: {md051:?}"
+        );
+    }
+
+    #[test]
+    fn test_link_inside_fenced_code_in_admonition_not_flagged() {
+        let content = "# Test\n\n## One\n\n!!! note\n\n    ```markdown\n    See [two](#two)\n    ```\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            md051.is_empty(),
+            "MD051 should not flag links inside fenced code blocks within admonitions: {md051:?}"
+        );
+    }
+
+    #[test]
+    fn test_broken_link_with_fenced_code_in_same_admonition() {
+        // Fenced code block coexists with a link in the same admonition.
+        // The link should still be detected even though pulldown-cmark may merge
+        // the indented content into a single code block range.
+        let content = "# Test\n\n## One\n\n!!! note\n\n    See [two](#two)\n\n    ```python\n    code = \"example\"\n    ```\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link '#two' even when fenced code exists in same admonition"
+        );
+    }
+
+    #[test]
+    fn test_broken_link_inside_nested_admonition_is_detected() {
+        let content = "# Test\n\n## One\n\n!!! note\n\n    !!! warning\n\n        See [two](#two)\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link '#two' inside nested admonition"
+        );
+    }
+
+    #[test]
+    fn test_mixed_valid_and_broken_links_in_admonition() {
+        let content = "# Test\n\n## One\n\n!!! note\n\n    See [one](#one) and [two](#two)\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert_eq!(
+            md051.len(),
+            1,
+            "MD051 should flag only the broken link '#two', not '#one': {md051:?}"
+        );
+    }
+
+    #[test]
+    fn test_lint_context_parses_links_inside_admonitions() {
+        let content = "# Test\n\n## One\n\n!!! note\n\n    See [one](#one)\n\n## Three\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+        let admonition_links: Vec<_> = ctx.links.iter().filter(|l| l.url.contains("#one")).collect();
+        assert!(
+            !admonition_links.is_empty(),
+            "LintContext should parse links inside MkDocs admonitions, found: {:?}",
+            ctx.links.iter().map(|l| l.url.as_ref()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_lint_context_parses_links_inside_content_tabs() {
+        let content = "# Test\n\n## One\n\n=== \"Tab 1\"\n\n    See [one](#one)\n\n## Three\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+        let tab_links: Vec<_> = ctx.links.iter().filter(|l| l.url.contains("#one")).collect();
+        assert!(
+            !tab_links.is_empty(),
+            "LintContext should parse links inside MkDocs content tabs, found: {:?}",
+            ctx.links.iter().map(|l| l.url.as_ref()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_collapsible_admonition_link_detection() {
+        let content = "# Test\n\n## One\n\n??? note\n\n    See [two](#two)\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link '#two' inside collapsible admonition"
+        );
+    }
+
+    #[test]
+    fn test_standard_flavor_admonition_not_affected() {
+        // In Standard flavor, 4-space-indented content is a code block, not an admonition
+        let content = "# Test\n\n## One\n\n!!! note\n\n    See [two](#two)\n\n## Three\n";
+        let warnings = lint_standard(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            md051.is_empty(),
+            "Standard flavor should not detect links inside 4-space-indented content: {md051:?}"
+        );
+    }
+}

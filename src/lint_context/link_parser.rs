@@ -316,6 +316,30 @@ pub(super) fn parse_links<'a>(
                 reference_id: Some(normalized_ref),
                 link_type: LinkType::Reference,
             });
+        } else if let Some(line_info) = lines.get(line_idx)
+            && line_info.in_mkdocs_container()
+        {
+            // Inline links inside MkDocs admonitions/tabs that pulldown-cmark missed
+            // because it treated the indented content as code blocks.
+            let url = cap
+                .get(2)
+                .or_else(|| cap.get(3))
+                .map(|m| m.as_str().trim())
+                .unwrap_or("");
+            if !url.is_empty() {
+                links.push(ParsedLink {
+                    line: line_num,
+                    start_col: col_start,
+                    end_col: col_end,
+                    byte_offset: match_start,
+                    byte_end: match_end,
+                    text: Cow::Borrowed(text),
+                    url: Cow::Borrowed(url),
+                    is_reference: false,
+                    reference_id: None,
+                    link_type: LinkType::Inline,
+                });
+            }
         }
     }
 
