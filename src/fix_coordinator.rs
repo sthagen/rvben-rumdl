@@ -203,11 +203,21 @@ impl FixCoordinator {
         // Track which rules actually applied fixes
         let mut fixed_rule_names = HashSet::new();
 
-        // Build set of unfixable rules for quick lookup
-        let unfixable_rules: HashSet<&str> = config.global.unfixable.iter().map(|s| s.as_str()).collect();
+        // Build set of unfixable rules for quick lookup, resolving aliases to canonical IDs
+        let unfixable_rules: HashSet<String> = config
+            .global
+            .unfixable
+            .iter()
+            .map(|s| crate::config::resolve_rule_name(s))
+            .collect();
 
-        // Build set of fixable rules (if specified)
-        let fixable_rules: HashSet<&str> = config.global.fixable.iter().map(|s| s.as_str()).collect();
+        // Build set of fixable rules (if specified), resolving aliases to canonical IDs
+        let fixable_rules: HashSet<String> = config
+            .global
+            .fixable
+            .iter()
+            .map(|s| crate::config::resolve_rule_name(s))
+            .collect();
         let has_fixable_allowlist = !fixable_rules.is_empty();
 
         // Ruff-style fix loop: keep applying fixes until content stabilizes
@@ -613,12 +623,12 @@ mod tests {
 
         let rules: Vec<Box<dyn Rule>> = vec![
             Box::new(ConditionalFixRule {
-                name: "AllowedRule",
+                name: "MD001",
                 check_fn: |content| content.contains("A"),
                 fix_fn: |content| content.replace("A", "X"),
             }),
             Box::new(ConditionalFixRule {
-                name: "NotAllowedRule",
+                name: "MD002",
                 check_fn: |content| content.contains("B"),
                 fix_fn: |content| content.replace("B", "Y"),
             }),
@@ -626,13 +636,60 @@ mod tests {
 
         let mut content = "AB".to_string();
         let mut config = Config::default();
-        config.global.fixable = vec!["AllowedRule".to_string()];
+        config.global.fixable = vec!["MD001".to_string()];
 
         let result = coordinator
             .apply_fixes_iterative(&rules, &[], &mut content, &config, 5, None)
             .unwrap();
 
         assert_eq!(content, "XB"); // Only A->X, B unchanged
+        assert_eq!(result.rules_fixed, 1);
+    }
+
+    #[test]
+    fn test_unfixable_rules_resolved_from_alias() {
+        let coordinator = FixCoordinator::new();
+
+        let rules: Vec<Box<dyn Rule>> = vec![Box::new(ConditionalFixRule {
+            name: "MD001",
+            check_fn: |content| content.contains("BAD"),
+            fix_fn: |content| content.replace("BAD", "GOOD"),
+        })];
+
+        let mut content = "BAD content".to_string();
+        let mut config = Config::default();
+        // Use the alias instead of canonical name
+        config.global.unfixable = vec!["heading-increment".to_string()];
+
+        let result = coordinator
+            .apply_fixes_iterative(&rules, &[], &mut content, &config, 5, None)
+            .unwrap();
+
+        assert_eq!(content, "BAD content"); // Should not be changed - alias resolved to MD001
+        assert_eq!(result.rules_fixed, 0);
+        assert!(result.converged);
+    }
+
+    #[test]
+    fn test_fixable_allowlist_resolved_from_alias() {
+        let coordinator = FixCoordinator::new();
+
+        let rules: Vec<Box<dyn Rule>> = vec![Box::new(ConditionalFixRule {
+            name: "MD001",
+            check_fn: |content| content.contains("BAD"),
+            fix_fn: |content| content.replace("BAD", "GOOD"),
+        })];
+
+        let mut content = "BAD content".to_string();
+        let mut config = Config::default();
+        // Use the alias instead of canonical name
+        config.global.fixable = vec!["heading-increment".to_string()];
+
+        let result = coordinator
+            .apply_fixes_iterative(&rules, &[], &mut content, &config, 5, None)
+            .unwrap();
+
+        assert_eq!(content, "GOOD content"); // Alias resolved, rule is in allowlist
         assert_eq!(result.rules_fixed, 1);
     }
 
