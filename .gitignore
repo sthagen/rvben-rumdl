@@ -1,4 +1,6 @@
 target/
+target-*/
+.test-repos/
 **/__pycache__
 **/*.egg-info
 cov-report

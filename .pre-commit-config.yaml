@@ -69,6 +69,12 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
 
+  # YAML linting
+  - repo: https://github.com/owenlamont/ryl-pre-commit
+    rev: v0.3.4
+    hooks:
+      - id: ryl
+
   # Markdown linting using rumdl itself (cargo run)
   - repo: local
     hooks:
