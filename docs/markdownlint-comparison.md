@@ -404,6 +404,7 @@ If you find a compatibility issue with markdownlint:
 
 ## See Also
 
+- [Tool Comparison Matrix](comparison.md) - Broad comparison of Markdown linters and formatters
 - [Comparison with mdformat](mdformat-comparison.md) - For users coming from the mdformat formatter
 
 ## References

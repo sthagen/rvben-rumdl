@@ -271,6 +271,7 @@ Some teams use mdformat for formatting and a separate linter. With rumdl, you ca
 
 ## See Also
 
+- [Tool Comparison Matrix](comparison.md) - Broad comparison of Markdown linters and formatters
 - [Comparison with markdownlint](markdownlint-comparison.md) - For users coming from the markdownlint linter
 
 ## References
