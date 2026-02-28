@@ -4544,8 +4544,7 @@ mod image_parsing_in_admonitions {
         let fenced_images: Vec<_> = ctx.images.iter().filter(|img| img.url.contains("image.png")).collect();
         assert!(
             fenced_images.is_empty(),
-            "Images inside fenced code blocks within admonitions should not be parsed: {:?}",
-            fenced_images
+            "Images inside fenced code blocks within admonitions should not be parsed: {fenced_images:?}",
         );
     }
 
@@ -4675,7 +4674,7 @@ mod admonition_content_broader_rules {
     fn test_md037_detects_space_in_emphasis_in_admonition() {
         let content = "# Test\n\n!!! note\n\n    This is * not emphasis *\n";
         let warnings = lint_mkdocs(content);
-        let md037: Vec<_> = warnings
+        let _md037: Vec<_> = warnings
             .iter()
             .filter(|w| w.rule_name.as_deref() == Some("MD037"))
             .collect();
@@ -4754,13 +4753,11 @@ mod admonition_content_broader_rules {
         let info = &ctx.lines[5];
         assert!(
             info.in_code_block,
-            "Line inside fenced code block within admonition should still be in_code_block: {:?}",
-            info
+            "Line inside fenced code block within admonition should still be in_code_block: {info:?}",
         );
         assert!(
             info.in_admonition,
-            "Line inside fenced code block within admonition should also be in_admonition: {:?}",
-            info
+            "Line inside fenced code block within admonition should also be in_admonition: {info:?}",
         );
     }
 

@@ -217,14 +217,17 @@ impl<'a> LintContext<'a> {
 
                 // Walk lines in this range, collecting sub-ranges where in_code_block is true
                 let mut sub_start: Option<usize> = None;
-                for i in start_line..end_line {
+                for (i, &offset) in line_offsets[start_line..end_line]
+                    .iter()
+                    .enumerate()
+                    .map(|(j, o)| (j + start_line, o))
+                {
                     let is_real_code = lines.get(i).is_some_and(|info| info.in_code_block);
                     if is_real_code && sub_start.is_none() {
-                        let byte_start = if i == start_line { start } else { line_offsets[i] };
+                        let byte_start = if i == start_line { start } else { offset };
                         sub_start = Some(byte_start);
                     } else if !is_real_code && sub_start.is_some() {
-                        let byte_end = line_offsets[i];
-                        new_code_blocks.push((sub_start.unwrap(), byte_end));
+                        new_code_blocks.push((sub_start.unwrap(), offset));
                         sub_start = None;
                     }
                 }
