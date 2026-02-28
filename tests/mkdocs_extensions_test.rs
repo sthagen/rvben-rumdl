@@ -4831,3 +4831,228 @@ mod admonition_content_broader_rules {
         );
     }
 }
+
+mod html_markdown_link_detection {
+    use super::*;
+
+    #[test]
+    fn test_broken_link_inside_div_markdown_is_detected() {
+        let content = "# Test\n\n## One\n\n<div markdown>\n\n    See [two](#two)\n\n</div>\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link '#two' inside <div markdown>"
+        );
+    }
+
+    #[test]
+    fn test_valid_link_inside_div_markdown_no_warning() {
+        let content = "# Test\n\n## One\n\n<div markdown>\n\n    See [one](#one)\n\n</div>\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            md051.is_empty(),
+            "MD051 should not flag valid link '#one' inside <div markdown>: {md051:?}"
+        );
+    }
+
+    #[test]
+    fn test_broken_link_inside_section_markdown() {
+        let content = "# Test\n\n## One\n\n<section markdown>\n\n    See [two](#two)\n\n</section>\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link '#two' inside <section markdown>"
+        );
+    }
+
+    #[test]
+    fn test_fenced_code_inside_div_markdown_preserved() {
+        // Fenced code blocks within <div markdown> should NOT have links detected
+        let content =
+            "# Test\n\n## One\n\n<div markdown>\n\n    ```\n    See [two](#two)\n    ```\n\n</div>\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            md051.is_empty(),
+            "MD051 should NOT detect links inside fenced code within <div markdown>: {md051:?}"
+        );
+    }
+
+    #[test]
+    fn test_mixed_content_and_fenced_code_in_div_markdown() {
+        // Link outside fenced code should be detected, link inside should not
+        let content = "# Test\n\n## One\n\n<div markdown>\n\n    See [two](#two)\n\n    ```\n    See [three](#three)\n    ```\n\n</div>\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link '#two' outside fenced code in <div markdown>"
+        );
+        // Should be exactly 1 warning (only for #two, not for #three in the code block)
+        assert_eq!(
+            md051.len(),
+            1,
+            "Should only detect link outside fenced code, not inside: {md051:?}"
+        );
+    }
+
+    #[test]
+    fn test_image_inside_div_markdown_detected() {
+        let content = "# Test\n\n<div markdown>\n\n    ![]()\n\n</div>\n";
+        let warnings = lint_mkdocs(content);
+        let md045: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD045"))
+            .collect();
+        assert!(
+            !md045.is_empty(),
+            "MD045 should detect image without alt text inside <div markdown>"
+        );
+    }
+
+    #[test]
+    fn test_link_context_line_info_in_div_markdown() {
+        let content = "# Test\n\n<div markdown>\n\n    Some content with [link](#test)\n\n</div>\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+
+        // Line 4 (0-indexed) = "    Some content with [link](#test)"
+        let line_info = &ctx.lines[4];
+        assert!(
+            line_info.in_mkdocs_html_markdown,
+            "Content inside <div markdown> should have in_mkdocs_html_markdown set"
+        );
+        assert!(
+            !line_info.in_code_block,
+            "Content inside <div markdown> should NOT have in_code_block set"
+        );
+    }
+
+    #[test]
+    fn test_code_blocks_byte_ranges_exclude_div_markdown_content() {
+        let content = "# Test\n\n<div markdown>\n\n    Regular content here\n\n</div>\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
+
+        // Find the byte offset of the indented content
+        let content_offset = content.find("    Regular content").unwrap();
+
+        let in_code = ctx
+            .code_blocks
+            .iter()
+            .any(|&(start, end)| content_offset >= start && content_offset < end);
+
+        assert!(
+            !in_code,
+            "Regular content inside <div markdown> should not be in code_blocks byte ranges"
+        );
+    }
+
+    #[test]
+    fn test_div_markdown_with_markdown_eq_1() {
+        let content = "# Test\n\n## One\n\n<div markdown=\"1\">\n\n    See [two](#two)\n\n</div>\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link '#two' inside <div markdown=\"1\">"
+        );
+    }
+
+    #[test]
+    fn test_standard_flavor_div_markdown_not_affected() {
+        // In standard flavor, <div markdown> indented content IS treated as code
+        let content = "# Test\n\n## One\n\n<div markdown>\n\n    See [two](#two)\n\n</div>\n\n## Three\n";
+        let warnings = lint_standard(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            md051.is_empty(),
+            "Standard flavor should not detect links in indented content of <div markdown>: {md051:?}"
+        );
+    }
+
+    #[test]
+    fn test_div_markdown_inside_admonition() {
+        // Nested container: <div markdown> inside an admonition
+        // Both handlers clear in_code_block — should work without conflict
+        let content =
+            "# Test\n\n## One\n\n!!! note\n\n    <div markdown>\n\n        See [two](#two)\n\n    </div>\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link in <div markdown> nested inside admonition"
+        );
+    }
+
+    #[test]
+    fn test_non_indented_div_markdown_content() {
+        // Content inside <div markdown> that is NOT indented 4 spaces
+        // pulldown-cmark handles this normally (no indented-code-block misclassification)
+        let content = "# Test\n\n## One\n\n<div markdown>\n\nSee [two](#two)\n\n</div>\n\n## Three\n";
+        let warnings = lint_mkdocs(content);
+        let md051: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD051"))
+            .collect();
+        assert!(
+            !md051.is_empty(),
+            "MD051 should detect broken link in non-indented <div markdown> content"
+        );
+    }
+
+    #[test]
+    fn test_md042_empty_link_inside_admonition() {
+        // MD042 should detect [text]() inside MkDocs containers
+        let content = "# Test\n\n!!! note\n\n    [click here]()\n";
+        let warnings = lint_mkdocs(content);
+        let md042: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD042"))
+            .collect();
+        assert!(
+            !md042.is_empty(),
+            "MD042 should detect empty-URL link inside admonition"
+        );
+    }
+
+    #[test]
+    fn test_md042_empty_link_inside_div_markdown() {
+        // MD042 should detect [text]() inside <div markdown> containers
+        let content = "# Test\n\n<div markdown>\n\n    [click here]()\n\n</div>\n";
+        let warnings = lint_mkdocs(content);
+        let md042: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.rule_name.as_deref() == Some("MD042"))
+            .collect();
+        assert!(
+            !md042.is_empty(),
+            "MD042 should detect empty-URL link inside <div markdown>"
+        );
+    }
+}

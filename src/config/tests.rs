@@ -1993,7 +1993,10 @@ fn test_validate_cli_rule_names_whitespace() {
 fn test_validate_cli_rule_names_fixable_valid() {
     // Valid fixable and unfixable rules
     let warnings = validate_cli_rule_names(None, None, None, None, Some("MD001,MD013"), Some("MD040"));
-    assert!(warnings.is_empty(), "Expected no warnings for valid fixable/unfixable rules");
+    assert!(
+        warnings.is_empty(),
+        "Expected no warnings for valid fixable/unfixable rules"
+    );
 }
 
 #[test]

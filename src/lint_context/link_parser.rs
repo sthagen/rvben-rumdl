@@ -326,20 +326,18 @@ pub(super) fn parse_links<'a>(
                 .or_else(|| cap.get(3))
                 .map(|m| m.as_str().trim())
                 .unwrap_or("");
-            if !url.is_empty() {
-                links.push(ParsedLink {
-                    line: line_num,
-                    start_col: col_start,
-                    end_col: col_end,
-                    byte_offset: match_start,
-                    byte_end: match_end,
-                    text: Cow::Borrowed(text),
-                    url: Cow::Borrowed(url),
-                    is_reference: false,
-                    reference_id: None,
-                    link_type: LinkType::Inline,
-                });
-            }
+            links.push(ParsedLink {
+                line: line_num,
+                start_col: col_start,
+                end_col: col_end,
+                byte_offset: match_start,
+                byte_end: match_end,
+                text: Cow::Borrowed(text),
+                url: Cow::Borrowed(url),
+                is_reference: false,
+                reference_id: None,
+                link_type: LinkType::Inline,
+            });
         }
     }
 
@@ -526,20 +524,18 @@ pub(super) fn parse_images<'a>(
                 .or_else(|| cap.get(3))
                 .map(|m| m.as_str().trim())
                 .unwrap_or("");
-            if !url.is_empty() {
-                images.push(ParsedImage {
-                    line: line_num,
-                    start_col: col_start,
-                    end_col: col_end,
-                    byte_offset: match_start,
-                    byte_end: match_end,
-                    alt_text: Cow::Borrowed(alt_text),
-                    url: Cow::Borrowed(url),
-                    is_reference: false,
-                    reference_id: None,
-                    link_type: LinkType::Inline,
-                });
-            }
+            images.push(ParsedImage {
+                line: line_num,
+                start_col: col_start,
+                end_col: col_end,
+                byte_offset: match_start,
+                byte_end: match_end,
+                alt_text: Cow::Borrowed(alt_text),
+                url: Cow::Borrowed(url),
+                is_reference: false,
+                reference_id: None,
+                link_type: LinkType::Inline,
+            });
         }
     }
 

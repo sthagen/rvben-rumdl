@@ -4,6 +4,59 @@ use crate::utils::mkdocs_html_markdown::MarkdownHtmlTracker;
 use super::ByteRanges;
 use super::types::*;
 
+/// Tracks whether we're inside a fenced code block within a MkDocs container.
+///
+/// MkDocs admonitions, content tabs, and markdown HTML blocks use 4-space indentation
+/// which pulldown-cmark misclassifies as indented code blocks. We clear `in_code_block`
+/// for container content, but must preserve it for actual fenced code blocks (``` or ~~~)
+/// within those containers.
+struct FencedCodeTracker {
+    in_fenced_code: bool,
+    fence_marker: Option<String>,
+}
+
+impl FencedCodeTracker {
+    fn new() -> Self {
+        Self {
+            in_fenced_code: false,
+            fence_marker: None,
+        }
+    }
+
+    /// Process a trimmed line and update fenced code state.
+    /// Returns true if currently inside a fenced code block.
+    fn process_line(&mut self, trimmed: &str) -> bool {
+        if !self.in_fenced_code {
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                let fence_char = trimmed.chars().next().unwrap();
+                let fence_len = trimmed.chars().take_while(|&c| c == fence_char).count();
+                if fence_len >= 3 {
+                    self.in_fenced_code = true;
+                    self.fence_marker = Some(fence_char.to_string().repeat(fence_len));
+                }
+            }
+        } else if let Some(ref marker) = self.fence_marker {
+            let fence_char = marker.chars().next().unwrap();
+            if trimmed.starts_with(marker.as_str())
+                && trimmed
+                    .chars()
+                    .skip(marker.len())
+                    .all(|c| c == fence_char || c.is_whitespace())
+            {
+                self.in_fenced_code = false;
+                self.fence_marker = None;
+            }
+        }
+        self.in_fenced_code
+    }
+
+    /// Reset state when exiting a container.
+    fn reset(&mut self) {
+        self.in_fenced_code = false;
+        self.fence_marker = None;
+    }
+}
+
 /// Detect ESM import/export blocks anywhere in MDX files
 /// MDX 2.0+ allows imports/exports anywhere in the document, not just at the top
 pub(super) fn detect_esm_blocks(content: &str, lines: &mut [LineInfo], flavor: MarkdownFlavor) {
@@ -202,24 +255,19 @@ pub(super) fn detect_mkdocs_line_info(content_lines: &[&str], lines: &mut [LineI
     // Track admonition context
     let mut in_admonition = false;
     let mut admonition_indent = 0;
-
-    // Track fenced code blocks within admonitions (separate from pulldown-cmark detection)
-    let mut in_admonition_fenced_code = false;
-    let mut admonition_fence_marker: Option<String> = None;
+    let mut admonition_fence = FencedCodeTracker::new();
 
     // Track tab context
     let mut in_tab = false;
     let mut tab_indent = 0;
-
-    // Track fenced code blocks within tabs (separate from pulldown-cmark detection)
-    let mut in_mkdocs_fenced_code = false;
-    let mut mkdocs_fence_marker: Option<String> = None;
+    let mut tab_fence = FencedCodeTracker::new();
 
     // Track definition list context
     let mut in_definition = false;
 
     // Track markdown-enabled HTML block context (grid cards, etc.)
     let mut markdown_html_tracker = MarkdownHtmlTracker::new();
+    let mut html_markdown_fence = FencedCodeTracker::new();
 
     for (i, line) in content_lines.iter().enumerate() {
         if i >= lines.len() {
@@ -236,58 +284,24 @@ pub(super) fn detect_mkdocs_line_info(content_lines: &[&str], lines: &mut [LineI
             // Nested admonition start lines (indented 4+ spaces) are misclassified as
             // indented code blocks by pulldown-cmark. Clear that flag.
             lines[i].in_code_block = false;
-            // Reset fenced code tracking when entering new admonition
-            in_admonition_fenced_code = false;
-            admonition_fence_marker = None;
+            admonition_fence.reset();
         } else if in_admonition {
-            let trimmed = line.trim();
-
-            // Track fenced code blocks within admonitions
-            if !in_admonition_fenced_code {
-                // Check for fence start (``` or ~~~)
-                if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                    let fence_char = trimmed.chars().next().unwrap();
-                    let fence_len = trimmed.chars().take_while(|&c| c == fence_char).count();
-                    if fence_len >= 3 {
-                        in_admonition_fenced_code = true;
-                        admonition_fence_marker = Some(fence_char.to_string().repeat(fence_len));
-                    }
-                }
-            } else if let Some(ref marker) = admonition_fence_marker {
-                // Check for fence end (same or more chars)
-                let fence_char = marker.chars().next().unwrap();
-                if trimmed.starts_with(marker.as_str())
-                    && trimmed
-                        .chars()
-                        .skip(marker.len())
-                        .all(|c| c == fence_char || c.is_whitespace())
-                {
-                    in_admonition_fenced_code = false;
-                    admonition_fence_marker = None;
-                }
-            }
+            let in_fenced = admonition_fence.process_line(line.trim());
 
             // Check if still in admonition content
             if line.trim().is_empty() {
-                // Blank lines are part of admonitions
                 lines[i].in_admonition = true;
-                // Only override code block if not in a fenced code block
-                if !in_admonition_fenced_code {
+                if !in_fenced {
                     lines[i].in_code_block = false;
                 }
             } else if mkdocs_admonitions::is_admonition_content(line, admonition_indent) {
                 lines[i].in_admonition = true;
-                // Override INDENTED code block detection - this is admonition content, not code
-                // But preserve fenced code block detection (```...```)
-                if !in_admonition_fenced_code {
+                if !in_fenced {
                     lines[i].in_code_block = false;
                 }
             } else {
-                // End of admonition
                 in_admonition = false;
-                in_admonition_fenced_code = false;
-                admonition_fence_marker = None;
-                // Check if this line starts a new admonition
+                admonition_fence.reset();
                 if mkdocs_admonitions::is_admonition_start(line) {
                     in_admonition = true;
                     admonition_indent = mkdocs_admonitions::get_admonition_indent(line).unwrap_or(0);
@@ -302,58 +316,23 @@ pub(super) fn detect_mkdocs_line_info(content_lines: &[&str], lines: &mut [LineI
             in_tab = true;
             tab_indent = mkdocs_tabs::get_tab_indent(line).unwrap_or(0);
             lines[i].in_content_tab = true;
-            // Reset fenced code tracking when entering new tab
-            in_mkdocs_fenced_code = false;
-            mkdocs_fence_marker = None;
+            tab_fence.reset();
         } else if in_tab {
-            let trimmed = line.trim();
+            let in_fenced = tab_fence.process_line(line.trim());
 
-            // Track fenced code blocks within tabs
-            if !in_mkdocs_fenced_code {
-                // Check for fence start (``` or ~~~)
-                if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                    let fence_char = trimmed.chars().next().unwrap();
-                    let fence_len = trimmed.chars().take_while(|&c| c == fence_char).count();
-                    if fence_len >= 3 {
-                        in_mkdocs_fenced_code = true;
-                        mkdocs_fence_marker = Some(fence_char.to_string().repeat(fence_len));
-                    }
-                }
-            } else if let Some(ref marker) = mkdocs_fence_marker {
-                // Check for fence end (same or more chars)
-                let fence_char = marker.chars().next().unwrap();
-                if trimmed.starts_with(marker.as_str())
-                    && trimmed
-                        .chars()
-                        .skip(marker.len())
-                        .all(|c| c == fence_char || c.is_whitespace())
-                {
-                    in_mkdocs_fenced_code = false;
-                    mkdocs_fence_marker = None;
-                }
-            }
-
-            // Check if still in tab content
             if line.trim().is_empty() {
-                // Blank lines are part of tabs
                 lines[i].in_content_tab = true;
-                // Only override code block if not in a fenced code block
-                if !in_mkdocs_fenced_code {
+                if !in_fenced {
                     lines[i].in_code_block = false;
                 }
             } else if mkdocs_tabs::is_tab_content(line, tab_indent) {
                 lines[i].in_content_tab = true;
-                // Override INDENTED code block detection - this is tab content, not code
-                // But preserve fenced code block detection (```...```)
-                if !in_mkdocs_fenced_code {
+                if !in_fenced {
                     lines[i].in_code_block = false;
                 }
             } else {
-                // End of tab content
                 in_tab = false;
-                in_mkdocs_fenced_code = false;
-                mkdocs_fence_marker = None;
-                // Check if this line starts a new tab
+                tab_fence.reset();
                 if mkdocs_tabs::is_tab_marker(line) {
                     in_tab = true;
                     tab_indent = mkdocs_tabs::get_tab_indent(line).unwrap_or(0);
@@ -366,6 +345,17 @@ pub(super) fn detect_mkdocs_line_info(content_lines: &[&str], lines: &mut [LineI
         // Supports div, section, article, aside, details, figure, footer, header, main, nav
         // with markdown, markdown="1", or markdown="block" attributes
         lines[i].in_mkdocs_html_markdown = markdown_html_tracker.process_line(line);
+
+        // Override indented code block detection for markdown HTML content,
+        // mirroring the pattern used for admonitions and tabs above.
+        if lines[i].in_mkdocs_html_markdown {
+            let in_fenced = html_markdown_fence.process_line(line.trim());
+            if !in_fenced {
+                lines[i].in_code_block = false;
+            }
+        } else {
+            html_markdown_fence.reset();
+        }
 
         // Skip remaining detection for lines in actual code blocks
         if lines[i].in_code_block {
