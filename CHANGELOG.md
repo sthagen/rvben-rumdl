@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.33] - 2026-02-28
+
+### Added
+
+- **CLI**: Add `--fixable` and `--unfixable` flags to control which rules are
+  allowed to auto-fix. `--fixable` acts as an allowlist (only listed rules can
+  fix), `--unfixable` acts as a blocklist (takes precedence). Both accept
+  comma-separated rule names or aliases
+  ([#472](https://github.com/rvben/rumdl/issues/472))
+
+### Fixed
+
+- **CLI**: Resolve rule name aliases in `fixable`/`unfixable` config lists so
+  that aliases like `commands-show-output` correctly match canonical names like
+  `MD014`
+- **Rules**: Detect links and images inside MkDocs admonitions, content tabs,
+  and markdown HTML blocks
+- **Docs**: Fix incorrect MD014 documentation that claimed the rule cannot be
+  auto-fixed — it removes `$` prompts from commands without output, matching
+  markdownlint-cli behavior ([#473](https://github.com/rvben/rumdl/issues/473))
+
+### Changed
+
+- **Docs**: Add feature comparison matrix and cold start benchmarks for all 8
+  comparison tools
+
 ## [0.1.32] - 2026-02-27
 
 ### Fixed
