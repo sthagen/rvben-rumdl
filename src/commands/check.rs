@@ -76,6 +76,8 @@ pub fn run_check(args: &CheckArgs, global_config_path: Option<&str>, isolated: b
         args.disable.as_deref(),
         args.extend_enable.as_deref(),
         args.extend_disable.as_deref(),
+        args.fixable.as_deref(),
+        args.unfixable.as_deref(),
     );
     if !cli_warnings.is_empty() && !args.silent {
         for warn in &cli_warnings {

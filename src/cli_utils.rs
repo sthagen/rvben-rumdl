@@ -25,6 +25,18 @@ pub fn apply_cli_overrides(sourced: &mut rumdl_config::SourcedConfig, args: &Che
         sourced.global.respect_gitignore =
             rumdl_config::SourcedValue::new(respect_gitignore, rumdl_config::ConfigSource::Cli);
     }
+
+    // Apply --fixable override if provided
+    if let Some(ref fixable) = args.fixable {
+        let rules: Vec<String> = fixable.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        sourced.global.fixable = rumdl_config::SourcedValue::new(rules, rumdl_config::ConfigSource::Cli);
+    }
+
+    // Apply --unfixable override if provided
+    if let Some(ref unfixable) = args.unfixable {
+        let rules: Vec<String> = unfixable.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        sourced.global.unfixable = rumdl_config::SourcedValue::new(rules, rumdl_config::ConfigSource::Cli);
+    }
 }
 
 /// Read file content as a UTF-8 string.

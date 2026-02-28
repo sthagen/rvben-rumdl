@@ -1904,6 +1904,8 @@ fn test_validate_cli_rule_names_valid() {
         Some("line-length"),
         Some("heading-increment"),
         Some("all"),
+        None,
+        None,
     );
     assert!(warnings.is_empty(), "Expected no warnings for valid rules");
 }
@@ -1911,17 +1913,17 @@ fn test_validate_cli_rule_names_valid() {
 #[test]
 fn test_validate_cli_rule_names_invalid() {
     // Invalid rule in --enable
-    let warnings = validate_cli_rule_names(Some("abc"), None, None, None);
+    let warnings = validate_cli_rule_names(Some("abc"), None, None, None, None, None);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].message.contains("Unknown rule in --enable: abc"));
 
     // Invalid rule in --disable
-    let warnings = validate_cli_rule_names(None, Some("xyz"), None, None);
+    let warnings = validate_cli_rule_names(None, Some("xyz"), None, None, None, None);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].message.contains("Unknown rule in --disable: xyz"));
 
     // Invalid rule in --extend-enable
-    let warnings = validate_cli_rule_names(None, None, Some("nonexistent"), None);
+    let warnings = validate_cli_rule_names(None, None, Some("nonexistent"), None, None, None);
     assert_eq!(warnings.len(), 1);
     assert!(
         warnings[0]
@@ -1930,19 +1932,29 @@ fn test_validate_cli_rule_names_invalid() {
     );
 
     // Invalid rule in --extend-disable
-    let warnings = validate_cli_rule_names(None, None, None, Some("fake-rule"));
+    let warnings = validate_cli_rule_names(None, None, None, Some("fake-rule"), None, None);
     assert_eq!(warnings.len(), 1);
     assert!(
         warnings[0]
             .message
             .contains("Unknown rule in --extend-disable: fake-rule")
     );
+
+    // Invalid rule in --fixable
+    let warnings = validate_cli_rule_names(None, None, None, None, Some("not-a-rule"), None);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].message.contains("Unknown rule in --fixable: not-a-rule"));
+
+    // Invalid rule in --unfixable
+    let warnings = validate_cli_rule_names(None, None, None, None, None, Some("bogus"));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].message.contains("Unknown rule in --unfixable: bogus"));
 }
 
 #[test]
 fn test_validate_cli_rule_names_mixed() {
     // Mix of valid and invalid
-    let warnings = validate_cli_rule_names(Some("MD001,abc,MD003"), None, None, None);
+    let warnings = validate_cli_rule_names(Some("MD001,abc,MD003"), None, None, None, None, None);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].message.contains("abc"));
 }
@@ -1950,7 +1962,7 @@ fn test_validate_cli_rule_names_mixed() {
 #[test]
 fn test_validate_cli_rule_names_suggestions() {
     // Typo should suggest correction
-    let warnings = validate_cli_rule_names(Some("line-lenght"), None, None, None);
+    let warnings = validate_cli_rule_names(Some("line-lenght"), None, None, None, None, None);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].message.contains("did you mean"));
     assert!(warnings[0].message.contains("line-length"));
@@ -1959,22 +1971,29 @@ fn test_validate_cli_rule_names_suggestions() {
 #[test]
 fn test_validate_cli_rule_names_none() {
     // All None - should return no warnings
-    let warnings = validate_cli_rule_names(None, None, None, None);
+    let warnings = validate_cli_rule_names(None, None, None, None, None, None);
     assert!(warnings.is_empty());
 }
 
 #[test]
 fn test_validate_cli_rule_names_empty_string() {
     // Empty strings should produce no warnings
-    let warnings = validate_cli_rule_names(Some(""), Some(""), Some(""), Some(""));
+    let warnings = validate_cli_rule_names(Some(""), Some(""), Some(""), Some(""), Some(""), Some(""));
     assert!(warnings.is_empty());
 }
 
 #[test]
 fn test_validate_cli_rule_names_whitespace() {
     // Whitespace handling
-    let warnings = validate_cli_rule_names(Some("  MD001  ,  MD013  "), None, None, None);
+    let warnings = validate_cli_rule_names(Some("  MD001  ,  MD013  "), None, None, None, None, None);
     assert!(warnings.is_empty(), "Whitespace should be trimmed");
+}
+
+#[test]
+fn test_validate_cli_rule_names_fixable_valid() {
+    // Valid fixable and unfixable rules
+    let warnings = validate_cli_rule_names(None, None, None, None, Some("MD001,MD013"), Some("MD040"));
+    assert!(warnings.is_empty(), "Expected no warnings for valid fixable/unfixable rules");
 }
 
 #[test]

@@ -14,6 +14,8 @@ pub fn validate_cli_rule_names(
     disable: Option<&str>,
     extend_enable: Option<&str>,
     extend_disable: Option<&str>,
+    fixable: Option<&str>,
+    unfixable: Option<&str>,
 ) -> Vec<ConfigValidationWarning> {
     let mut warnings = Vec::new();
     let all_rule_names: Vec<String> = RULE_ALIAS_MAP.keys().map(|s| s.to_string()).collect();
@@ -55,6 +57,12 @@ pub fn validate_cli_rule_names(
     }
     if let Some(ed) = extend_disable {
         validate_list(ed, "--extend-disable", &mut warnings);
+    }
+    if let Some(f) = fixable {
+        validate_list(f, "--fixable", &mut warnings);
+    }
+    if let Some(u) = unfixable {
+        validate_list(u, "--unfixable", &mut warnings);
     }
 
     warnings
@@ -142,6 +150,46 @@ pub(super) fn validate_config_sourced_internal<S>(
                 format!("Unknown rule in global.extend-disable: {rule_name} (did you mean: {formatted}?)")
             } else {
                 format!("Unknown rule in global.extend-disable: {rule_name}")
+            };
+            warnings.push(ConfigValidationWarning {
+                message,
+                rule: Some(rule_name.clone()),
+                key: None,
+            });
+        }
+    }
+
+    for rule_name in &sourced.global.fixable.value {
+        if !is_valid_rule_name(rule_name) {
+            let message = if let Some(suggestion) = suggest_similar_key(rule_name, &all_rule_names) {
+                let formatted = if suggestion.starts_with("MD") {
+                    suggestion
+                } else {
+                    suggestion.to_lowercase()
+                };
+                format!("Unknown rule in global.fixable: {rule_name} (did you mean: {formatted}?)")
+            } else {
+                format!("Unknown rule in global.fixable: {rule_name}")
+            };
+            warnings.push(ConfigValidationWarning {
+                message,
+                rule: Some(rule_name.clone()),
+                key: None,
+            });
+        }
+    }
+
+    for rule_name in &sourced.global.unfixable.value {
+        if !is_valid_rule_name(rule_name) {
+            let message = if let Some(suggestion) = suggest_similar_key(rule_name, &all_rule_names) {
+                let formatted = if suggestion.starts_with("MD") {
+                    suggestion
+                } else {
+                    suggestion.to_lowercase()
+                };
+                format!("Unknown rule in global.unfixable: {rule_name} (did you mean: {formatted}?)")
+            } else {
+                format!("Unknown rule in global.unfixable: {rule_name}")
             };
             warnings.push(ConfigValidationWarning {
                 message,

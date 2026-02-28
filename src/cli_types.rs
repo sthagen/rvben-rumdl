@@ -61,6 +61,16 @@ pub struct CheckArgs {
     #[arg(long)]
     pub extend_disable: Option<String>,
 
+    /// Only allow these rules to be fixed (comma-separated). When specified,
+    /// only listed rules will be auto-fixed; all others are treated as unfixable.
+    #[arg(long)]
+    pub fixable: Option<String>,
+
+    /// Prevent these rules from being fixed (comma-separated). Takes precedence
+    /// over --fixable.
+    #[arg(long)]
+    pub unfixable: Option<String>,
+
     /// Exclude specific files or directories (comma-separated glob patterns)
     #[arg(long)]
     pub exclude: Option<String>,
