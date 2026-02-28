@@ -102,13 +102,34 @@ flavor = "mkdocs"
 
 ## Performance
 
-Direct benchmarks vary by workload and hardware. General characteristics:
+Cold start benchmark on the Rust Book (478 Markdown files), measured with [hyperfine](https://github.com/sharkdp/hyperfine). All tools invoked via `npx`/`uvx` or native binary — no global installs.
 
-- **Rust tools** (rumdl, mado) have no interpreter startup cost and can process files in parallel. rumdl additionally caches results, so unchanged files are skipped on subsequent runs.
-- **Node.js tools** (markdownlint-cli, remark-lint, Prettier) have interpreter startup overhead but are fast once loaded. markdownlint-cli2 is generally faster than markdownlint-cli.
-- **Python tools** (pymarkdown, mdformat) are typically slower on large repositories due to interpreter overhead. pymarkdown uses its own parser, which adds some latency.
+| Tool                    | Type   | Mean   | vs rumdl |
+| ----------------------- | ------ | ------ | -------- |
+| **mado**                | Lint   | 77 ms  | 0.4x     |
+| **rumdl**               | Lint   | 217 ms | 1.0x     |
+| **pymarkdown**          | Lint   | 240 ms | 1.1x     |
+| **remark-lint**         | Lint   | 671 ms | 3.1x     |
+| **markdownlint-cli2**   | Lint   | 2.2 s  | 10.2x    |
+| **markdownlint-cli**    | Lint   | 2.7 s  | 12.5x    |
+| **mdformat**            | Format | 4.0 s  | 18.5x    |
+| **Prettier**            | Format | 4.8 s  | 22.3x    |
 
-For benchmark data comparing rumdl and markdownlint on real repositories, see the [performance section](../README.md#performance) in the main README.
+![Benchmark chart](../assets/benchmark.svg)
+
+> **Methodology:** Cold start (no application cache), warm OS disk cache after warmup. rumdl uses `--no-cache`. Node.js tools run via `npx`, Python tools via `uvx`. Measured on Apple M1 Pro. Last run:
+> February 2026.
+>
+> Reproduce: `make benchmark` (requires hyperfine, Node.js, Python).
+
+**Notes:**
+
+- **mado** is faster in cold-start benchmarks because it does less work per file: fewer rules (38 vs 71), no fix generation, and no flavor detection.
+  The gap reflects feature surface area, not implementation quality.
+- **rumdl** supports result caching (`rumdl check` without `--no-cache`), which skips unchanged files on subsequent runs — typically under 50 ms, faster than mado's cold start.
+- **pymarkdown** performs well for a Python tool due to its efficient scanner architecture.
+- **Node.js tools** incur interpreter startup overhead. markdownlint-cli2 is faster than markdownlint-cli due to its async architecture.
+- **Formatters** (Prettier, mdformat) do more work per file than linters, which partly explains their longer times.
 
 ## See Also
 
