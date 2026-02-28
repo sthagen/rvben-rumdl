@@ -492,10 +492,11 @@ pub(super) fn parse_images<'a>(
             continue;
         }
 
+        let (line_idx, line_num, col_start) = super::LintContext::find_line_for_offset(lines, match_start);
+        let (_, _end_line_num, col_end) = super::LintContext::find_line_for_offset(lines, match_end);
+        let alt_text = cap.get(1).map_or("", |m| m.as_str());
+
         if let Some(ref_id) = cap.get(6) {
-            let (_, line_num, col_start) = super::LintContext::find_line_for_offset(lines, match_start);
-            let (_, _end_line_num, col_end) = super::LintContext::find_line_for_offset(lines, match_end);
-            let alt_text = cap.get(1).map_or("", |m| m.as_str());
             let ref_id_str = ref_id.as_str();
             let normalized_ref = if ref_id_str.is_empty() {
                 Cow::Owned(alt_text.to_lowercase())
@@ -515,6 +516,30 @@ pub(super) fn parse_images<'a>(
                 reference_id: Some(normalized_ref),
                 link_type: LinkType::Reference,
             });
+        } else if let Some(line_info) = lines.get(line_idx)
+            && line_info.in_mkdocs_container()
+        {
+            // Inline images inside MkDocs admonitions/tabs that pulldown-cmark missed
+            // because it treated the indented content as code blocks.
+            let url = cap
+                .get(2)
+                .or_else(|| cap.get(3))
+                .map(|m| m.as_str().trim())
+                .unwrap_or("");
+            if !url.is_empty() {
+                images.push(ParsedImage {
+                    line: line_num,
+                    start_col: col_start,
+                    end_col: col_end,
+                    byte_offset: match_start,
+                    byte_end: match_end,
+                    alt_text: Cow::Borrowed(alt_text),
+                    url: Cow::Borrowed(url),
+                    is_reference: false,
+                    reference_id: None,
+                    link_type: LinkType::Inline,
+                });
+            }
         }
     }
 
