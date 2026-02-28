@@ -155,14 +155,14 @@ rumdl vscode
 
 **rumdl supports 6 Markdown flavors** to adapt rule behavior for different documentation systems:
 
-| Flavor     | Use Case                     | Key Adjustments                        |
-| ---------- | ---------------------------- | -------------------------------------- |
-| `standard` | Default Markdown             | CommonMark + GFM extensions            |
-| `gfm`      | GitHub Flavored Markdown     | Security-sensitive HTML, autolinks     |
-| `mkdocs`   | MkDocs / Material for MkDocs | Admonitions, tabs, mkdocstrings        |
-| `mdx`      | MDX (JSX in Markdown)        | JSX components, ESM imports            |
+| Flavor     | Use Case                     | Key Adjustments                          |
+| ---------- | ---------------------------- | ---------------------------------------- |
+| `standard` | Default Markdown             | CommonMark + GFM extensions              |
+| `gfm`      | GitHub Flavored Markdown     | Security-sensitive HTML, autolinks       |
+| `mkdocs`   | MkDocs / Material for MkDocs | Admonitions, tabs, mkdocstrings          |
+| `mdx`      | MDX (JSX in Markdown)        | JSX components, ESM imports              |
 | `obsidian` | Obsidian knowledge base      | Callouts, Dataview, Templater, wikilinks |
-| `quarto`   | Quarto / RMarkdown           | Citations, shortcodes, executable code |
+| `quarto`   | Quarto / RMarkdown           | Citations, shortcodes, executable code   |
 
 **Configuration:**
 
@@ -298,35 +298,35 @@ rumdl additionally supports:
 
 1. **Install rumdl:**
 
-   ```bash
+    ```bash
    uv tool install rumdl
    # or: cargo install rumdl
    # or: pip install rumdl
    # or: brew install rumdl (See README.md)
-   ```
+    ```
 
 2. **Test with existing config:**
 
-   ```bash
+    ```bash
    # rumdl automatically discovers .markdownlint.json
    rumdl check .
-   ```
+    ```
 
 3. **(Optional) Convert config:**
 
-   ```bash
+    ```bash
    rumdl import .markdownlint.json
-   ```
+    ```
 
 4. **Update CI/CD:**
 
-   ```yaml
+    ```yaml
    # Before (markdownlint)
    - run: markdownlint '**/*.md'
 
    # After (rumdl)
    - run: rumdl check .
-   ```
+    ```
 
 ### Known Behavioral Differences
 
@@ -334,13 +334,17 @@ These are intentional deviations where rumdl produces different results than mar
 
 **MD004 (unordered-list-style):** In `consistent` mode, rumdl uses prevalence-based detection (most common marker wins, ties prefer dash). markdownlint uses the first marker as the standard.
 
-**MD005/MD007 (list-indent / ul-indent):** rumdl uses parent-based dynamic indentation, properly handling ordered lists with variable marker widths (e.g., `1.` vs `10.`). markdownlint may treat children at different indentation levels as inconsistent.
+**MD005/MD007 (list-indent / ul-indent):** rumdl uses parent-based dynamic indentation, properly handling ordered lists with variable marker widths (e.g., `1.` vs `10.`). markdownlint may treat
+children at different indentation levels as inconsistent.
 
-**MD012 (no-multiple-blanks):** rumdl uses the `filtered_lines()` architecture to skip frontmatter, code blocks, and flavor-specific constructs. This may produce slightly different counts near block boundaries.
+**MD012 (no-multiple-blanks):** rumdl uses the `filtered_lines()` architecture to skip frontmatter, code blocks, and flavor-specific constructs. This may produce slightly different counts near block
+boundaries.
 
-**MD013 (line-length):** rumdl exempts entire lines that are completely unbreakable (URLs with no spaces, long code spans). It also supports `line_length = 0` to mean unlimited. markdownlint exempts more selectively.
+**MD013 (line-length):** rumdl exempts entire lines that are completely unbreakable (URLs with no spaces, long code spans). It also supports `line_length = 0` to mean unlimited. markdownlint exempts
+more selectively.
 
-**MD029 (ordered-list-prefix):** rumdl uses CommonMark AST start values. A list starting at `11` expects items 11, 12, 13. rumdl only auto-fixes when `start_value == 1` to preserve explicit numbering intent.
+**MD029 (ordered-list-prefix):** rumdl uses CommonMark AST start values. A list starting at `11` expects items 11, 12, 13. rumdl only auto-fixes when `start_value == 1` to preserve explicit numbering
+intent.
 
 If you encounter other compatibility issues, please [file an issue](https://github.com/rvben/rumdl/issues).
 

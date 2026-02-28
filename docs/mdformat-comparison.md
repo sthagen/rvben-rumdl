@@ -72,14 +72,14 @@ pip install mdformat-gfm mdformat-frontmatter
 flavor = "gfm"  # or: mkdocs, mdx, obsidian, quarto
 ```
 
-| Syntax               | mdformat          | rumdl                |
-| -------------------- | ----------------- | -------------------- |
-| GFM (tables, tasks)  | mdformat-gfm      | Built-in (standard)  |
-| Frontmatter          | mdformat-frontmatter | Built-in          |
-| Admonitions          | mdformat-admon    | mkdocs flavor        |
-| MDX/JSX              | ❌                | mdx flavor           |
-| Obsidian             | ❌                | obsidian flavor      |
-| Quarto               | ❌                | quarto flavor        |
+| Syntax              | mdformat             | rumdl               |
+| ------------------- | -------------------- | ------------------- |
+| GFM (tables, tasks) | mdformat-gfm         | Built-in (standard) |
+| Frontmatter         | mdformat-frontmatter | Built-in            |
+| Admonitions         | mdformat-admon       | mkdocs flavor       |
+| MDX/JSX             | ❌                   | mdx flavor          |
+| Obsidian            | ❌                   | obsidian flavor     |
+| Quarto              | ❌                   | quarto flavor       |
 
 ## Performance
 
@@ -207,23 +207,23 @@ line-length = 80
 
 1. **Install rumdl:**
 
-   ```bash
+    ```bash
    pip install rumdl
-   ```
+    ```
 
 2. **Replace format command:**
 
-   ```bash
+    ```bash
    # Before
    mdformat docs/
 
    # After
    rumdl fmt docs/
-   ```
+    ```
 
 3. **Update pre-commit config:**
 
-   ```yaml
+    ```yaml
    # Before
    - repo: https://github.com/executablebooks/mdformat
      rev: 0.7.17
@@ -235,18 +235,18 @@ line-length = 80
      rev: v0.1.10
      hooks:
        - id: rumdl
-   ```
+    ```
 
 4. **Convert configuration:**
 
-   ```toml
+    ```toml
    # mdformat .mdformat.toml
    wrap = 80
 
    # rumdl equivalent .rumdl.toml
    [global]
    line-length = 80
-   ```
+    ```
 
 ## Using Both Tools Together
 
