@@ -157,6 +157,21 @@ pub struct MD060Config {
     /// ```
     #[serde(default, rename = "loose-last-column")]
     pub loose_last_column: bool,
+
+    /// Pads the delimiter row's dashes to match header column widths under
+    /// `compact` and `tight` styles.
+    ///
+    /// - `false` (default): delimiter cells use the minimum dash count.
+    /// - `true`: delimiter pipe positions align with header pipe positions;
+    ///   body rows remain compact/tight and are not padded.
+    ///
+    /// No effect under `aligned` / `aligned-no-space` (those styles already
+    /// align the delimiter row by construction).
+    ///
+    /// Mirrors markdownlint MD060's `aligned_delimiter` option; the snake_case
+    /// alias is accepted for cross-tool compatibility.
+    #[serde(default, rename = "aligned-delimiter", alias = "aligned_delimiter")]
+    pub aligned_delimiter: bool,
 }
 
 impl Default for MD060Config {
@@ -169,6 +184,7 @@ impl Default for MD060Config {
             column_align_header: None,
             column_align_body: None,
             loose_last_column: false,
+            aligned_delimiter: false,
         }
     }
 }
@@ -231,5 +247,24 @@ mod tests {
     fn test_style_normalizes_case_for_compatibility() {
         let uppercase: MD060Config = toml::from_str("style = \"ALIGNED_NO_SPACE\"").unwrap();
         assert_eq!(uppercase.style, "aligned-no-space");
+    }
+
+    #[test]
+    fn test_aligned_delimiter_default_is_false() {
+        let cfg: MD060Config = toml::from_str("").unwrap();
+        assert!(!cfg.aligned_delimiter, "aligned-delimiter defaults to false");
+    }
+
+    #[test]
+    fn test_aligned_delimiter_kebab_case_key() {
+        let cfg: MD060Config = toml::from_str("aligned-delimiter = true").unwrap();
+        assert!(cfg.aligned_delimiter, "kebab-case aligned-delimiter is accepted");
+    }
+
+    #[test]
+    fn test_aligned_delimiter_snake_case_alias_for_markdownlint_parity() {
+        // markdownlint uses `aligned_delimiter` (snake_case). rumdl accepts both for compatibility.
+        let cfg: MD060Config = toml::from_str("aligned_delimiter = true").unwrap();
+        assert!(cfg.aligned_delimiter, "snake_case aligned_delimiter alias is accepted");
     }
 }
