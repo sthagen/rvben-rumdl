@@ -1375,3 +1375,45 @@ reflow-mode = "semantic-line-breaks"
         "Data row got mangled in:\n{after}"
     );
 }
+
+#[test]
+fn test_md013_list_item_prose_with_embedded_pipe_is_not_a_table() {
+    // Negative test for the table classification heuristic. A list-item
+    // continuation paragraph that contains literal `|` characters mid-prose
+    // (e.g. describing a CLI pipe command) must NOT be classified as a
+    // table row — otherwise the line is preserved verbatim and skips
+    // reflow, producing line-length violations on what is plain prose.
+    //
+    // GFM tables in this position require pipe-bordered rows (`| ... |`)
+    // or a delimiter row immediately after a header; isolated prose with
+    // an embedded pipe is neither.
+    let content = "- A list item describing one important detail with technical context for later.\n    The continuation line discusses how to use the grep | sort pipeline correctly today.\n";
+    let config = r#"
+flavor = "standard"
+
+[MD013]
+line-length = 60
+reflow = true
+reflow-mode = "semantic-line-breaks"
+"#;
+    let after = run_md013_fix(content, config);
+
+    // The prose continuation line was over 60 chars, so reflow MUST have
+    // wrapped it. If it was misclassified as a table row it would still
+    // be present verbatim, well over the limit.
+    let long_lines: Vec<&str> = after
+        .lines()
+        .filter(|line| line.chars().count() > 70 && line.contains('|'))
+        .collect();
+    assert!(
+        long_lines.is_empty(),
+        "Continuation line containing `|` was not reflowed — likely \
+         misclassified as a table row. Long lines:\n{long_lines:#?}\n\nFull output:\n{after}",
+    );
+
+    // The prose content must still be present, just rewrapped.
+    assert!(
+        after.contains("grep | sort"),
+        "Pipeline prose missing from output:\n{after}",
+    );
+}

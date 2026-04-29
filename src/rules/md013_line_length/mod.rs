@@ -1666,8 +1666,27 @@ impl MD013LineLength {
                             }
                             // Check if this is a GFM table row. Tables nested inside list
                             // items must be preserved verbatim — joining them with prose
-                            // breaks the column structure (issue #590).
-                            else if TableUtils::is_potential_table_row(&content) {
+                            // breaks the column structure.
+                            //
+                            // `is_potential_table_row` is intentionally permissive at the
+                            // row level: any line with `|` and 2+ cells qualifies. To avoid
+                            // misclassifying prose continuation lines that contain a literal
+                            // pipe (e.g. "use grep | sort to ..."), require one of:
+                            //   - the row is pipe-bordered (`| ... |`), the canonical form
+                            //     for tables nested in lists; or
+                            //   - the next line is a delimiter row (this is a header); or
+                            //   - the previous classified line was already a Table (this is
+                            //     a continuation row).
+                            else if TableUtils::is_potential_table_row(&content) && {
+                                let pipe_bordered = content.trim().starts_with('|') && content.trim().ends_with('|');
+                                let next_is_delim = ctx
+                                    .lines
+                                    .get(i + 1)
+                                    .map(|next| TableUtils::is_delimiter_row(next.content(ctx.content)))
+                                    .unwrap_or(false);
+                                let prev_was_table = matches!(list_item_lines.last(), Some(LineType::Table(..)));
+                                pipe_bordered || next_is_delim || prev_was_table
+                            } {
                                 list_item_lines.push(LineType::Table(content, indent));
                             } else {
                                 list_item_lines.push(LineType::Content(content));
