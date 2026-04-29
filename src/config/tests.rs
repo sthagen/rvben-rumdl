@@ -1628,6 +1628,90 @@ fn test_per_file_flavor_matches_absolute_path_with_project_root_only_no_cwd() {
 }
 
 #[test]
+#[serial_test::serial]
+fn test_per_file_flavor_matches_absolute_path_with_cwd_fallback() {
+    // End-to-end: when project_root is None, an absolute path under cwd must
+    // resolve via the cwd fallback path. This is the scenario from #591.
+    // Mutates global cwd, so #[serial_test::serial] guards parallel races.
+    let temp = tempdir().unwrap();
+    let file = make_file(&temp, "docs/guide.md");
+    let cwd = temp.path().canonicalize().unwrap();
+
+    let mut per_file_flavor = indexmap::IndexMap::new();
+    per_file_flavor.insert("docs/**/*.md".to_string(), MarkdownFlavor::MkDocs);
+    let config = Config {
+        per_file_flavor,
+        project_root: None,
+        ..Default::default()
+    };
+
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&cwd).unwrap();
+    let result = std::panic::catch_unwind(|| config.get_flavor_for_file(&file));
+    std::env::set_current_dir(&prev_cwd).unwrap();
+    let flavor = result.unwrap();
+
+    assert_eq!(flavor, MarkdownFlavor::MkDocs);
+}
+
+#[test]
+#[serial_test::serial]
+fn test_per_file_ignores_matches_absolute_path_with_cwd_fallback() {
+    // Sibling end-to-end test for the per-file-ignores path, which uses the
+    // same normalize_match_path helper. An absolute file path under cwd must
+    // resolve the rule list correctly when project_root is None.
+    use std::collections::HashMap;
+
+    let temp = tempdir().unwrap();
+    let file = make_file(&temp, "docs/guide.md");
+    let cwd = temp.path().canonicalize().unwrap();
+
+    let mut per_file_ignores = HashMap::new();
+    per_file_ignores.insert("docs/**/*.md".to_string(), vec!["MD013".to_string()]);
+    let config = Config {
+        per_file_ignores,
+        project_root: None,
+        ..Default::default()
+    };
+
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&cwd).unwrap();
+    let result = std::panic::catch_unwind(|| config.get_ignored_rules_for_file(&file));
+    std::env::set_current_dir(&prev_cwd).unwrap();
+    let ignored = result.unwrap();
+
+    assert!(
+        ignored.contains("MD013"),
+        "MD013 should be ignored for docs/guide.md via cwd fallback. Got: {ignored:?}",
+    );
+}
+
+#[test]
+fn test_normalize_match_path_globset_round_trip() {
+    // The full pipeline (normalize → globset match) must produce a relative
+    // path that a forward-slash glob can match. On Windows this additionally
+    // exercises UNC-prefix stripping (canonicalize() returns `\\?\C:\...`)
+    // and backslash → forward-slash normalization in globset; on Unix the
+    // canonical path is already free of UNC and uses forward slashes.
+    let temp = tempdir().unwrap();
+    let file = make_file(&temp, "docs/guide.md");
+    let root = temp.path().canonicalize().unwrap();
+
+    let result = super::types::normalize_match_path(&file, Some(&root), None);
+    assert!(result.is_relative(), "expected relative path, got {result:?}");
+
+    let glob = globset::GlobBuilder::new("docs/**/*.md")
+        .literal_separator(true)
+        .build()
+        .unwrap()
+        .compile_matcher();
+    assert!(
+        glob.is_match(result.as_ref()),
+        "globset must match {result:?} against `docs/**/*.md`",
+    );
+}
+
+#[test]
 fn test_generate_json_schema() {
     use schemars::schema_for;
     use std::env;
