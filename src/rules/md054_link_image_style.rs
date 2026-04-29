@@ -1215,7 +1215,19 @@ mod fix_tests {
         let rule = MD054LinkImageStyle::new(false, false, true, false, false, false);
         let content = "[docs][].\n\n[docs]: https://example.com\n";
         let fixed = assert_round_trip_clean(&rule, content);
-        assert!(fixed.contains("[docs][docs]"));
+        assert_eq!(fixed, "[docs][docs].\n\n[docs]: https://example.com\n");
+    }
+
+    #[test]
+    fn fix_collapsed_to_full_with_trailing_content() {
+        // Regression: pulldown-cmark's offset_iter range for a `Collapsed` link
+        // covers only the `[text]` portion, not the trailing `[]`. If the span
+        // end isn't extended, the auto-fix replaces just `[text]` and leaves
+        // the `[]` behind, producing malformed `[docs][docs][]` output.
+        let rule = MD054LinkImageStyle::new(false, false, true, false, false, false);
+        let content = "See [docs][] for details.\n\n[docs]: https://example.com\n";
+        let fixed = assert_round_trip_clean(&rule, content);
+        assert_eq!(fixed, "See [docs][docs] for details.\n\n[docs]: https://example.com\n");
     }
 
     #[test]

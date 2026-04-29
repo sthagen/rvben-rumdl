@@ -47,6 +47,23 @@ static IMAGE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     ).unwrap()
 });
 
+/// Pulldown-cmark's offset_iter range for `Collapsed` links and images covers
+/// only the `[text]` portion, omitting the trailing `[]` that distinguishes
+/// the collapsed form from a shortcut. Extend the end offset to include those
+/// two bytes so consumers see the full syntactic span (notably MD054's
+/// auto-fix, which replaces the entire link span when converting styles).
+fn extend_collapsed_byte_end(content: &str, link_type: LinkType, byte_end: usize) -> usize {
+    if !matches!(link_type, LinkType::Collapsed) {
+        return byte_end;
+    }
+    let bytes = content.as_bytes();
+    if bytes.get(byte_end) == Some(&b'[') && bytes.get(byte_end + 1) == Some(&b']') {
+        byte_end + 2
+    } else {
+        byte_end
+    }
+}
+
 // Reference definition pattern
 //
 // Mirrors the CommonMark §4.7 grammar closely enough for downstream consumers
@@ -167,8 +184,9 @@ pub(super) fn parse_links_images_pulldown<'a>(
             }
             Event::End(TagEnd::Link) => {
                 if let Some((start_pos, url, link_type, ref_id, title)) = link_stack.pop() {
+                    let span_end = extend_collapsed_byte_end(content, link_type, range.end);
                     // Track link byte range for heading detection
-                    link_byte_ranges.push((start_pos, range.end));
+                    link_byte_ranges.push((start_pos, span_end));
 
                     if is_in_html_comment_ranges(html_comment_ranges, start_pos) {
                         link_text_chunks.clear();
@@ -182,7 +200,7 @@ pub(super) fn parse_links_images_pulldown<'a>(
                         continue;
                     }
 
-                    let (_, _end_line_num, col_end) = super::LintContext::find_line_for_offset(lines, range.end);
+                    let (_, _end_line_num, col_end) = super::LintContext::find_line_for_offset(lines, span_end);
 
                     let is_reference = matches!(
                         link_type,
@@ -271,7 +289,7 @@ pub(super) fn parse_links_images_pulldown<'a>(
                         start_col: col_start,
                         end_col: col_end,
                         byte_offset: start_pos,
-                        byte_end: range.end,
+                        byte_end: span_end,
                         text: link_text,
                         url: Cow::Owned(url.to_string()),
                         title: title_field,
@@ -285,6 +303,8 @@ pub(super) fn parse_links_images_pulldown<'a>(
             }
             Event::End(TagEnd::Image) => {
                 if let Some((start_pos, url, link_type, ref_id, title)) = image_stack.pop() {
+                    let span_end = extend_collapsed_byte_end(content, link_type, range.end);
+
                     if CodeBlockUtils::is_in_code_block(code_blocks, start_pos) {
                         link_text_chunks.clear();
                         continue;
@@ -299,7 +319,7 @@ pub(super) fn parse_links_images_pulldown<'a>(
                     }
 
                     let (_, line_num, col_start) = super::LintContext::find_line_for_offset(lines, start_pos);
-                    let (_, _end_line_num, col_end) = super::LintContext::find_line_for_offset(lines, range.end);
+                    let (_, _end_line_num, col_end) = super::LintContext::find_line_for_offset(lines, span_end);
 
                     let is_reference = matches!(
                         link_type,
@@ -392,7 +412,7 @@ pub(super) fn parse_links_images_pulldown<'a>(
                         start_col: col_start,
                         end_col: col_end,
                         byte_offset: start_pos,
-                        byte_end: range.end,
+                        byte_end: span_end,
                         alt_text,
                         url,
                         title: title_field,
