@@ -1163,3 +1163,215 @@ reflow-mode = "semantic-line-breaks"
     let after_second = fs::read_to_string(&file_path).unwrap();
     assert_eq!(after, after_second, "MD013 fix must be idempotent for tables in lists");
 }
+
+/// Helper for the issue #590 family of regressions: write the given Markdown
+/// and config to a temp dir, run `rumdl check --fix`, return the resulting
+/// file contents. Asserts no exit-code-2 (rumdl error).
+fn run_md013_fix(content: &str, config: &str) -> String {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("input.md");
+    fs::write(&file_path, content).unwrap();
+
+    let config_path = dir.path().join(".rumdl.toml");
+    fs::write(&config_path, config).unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_rumdl"))
+        .arg("check")
+        .arg("--fix")
+        .arg(&file_path)
+        .arg("--config")
+        .arg(&config_path)
+        .output()
+        .expect("Failed to execute rumdl");
+
+    if output.status.code() == Some(2) {
+        panic!(
+            "rumdl errored (exit 2). stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let after = fs::read_to_string(&file_path).unwrap();
+
+    // Idempotence: a second pass must not change anything.
+    let _ = std::process::Command::new(env!("CARGO_BIN_EXE_rumdl"))
+        .arg("check")
+        .arg("--fix")
+        .arg(&file_path)
+        .arg("--config")
+        .arg(&config_path)
+        .output()
+        .expect("Failed to execute rumdl");
+    let after_second = fs::read_to_string(&file_path).unwrap();
+    assert_eq!(
+        after, after_second,
+        "MD013 fix must be idempotent. First pass:\n{after}\nSecond pass:\n{after_second}",
+    );
+
+    after
+}
+
+/// Asserts the table rows in `text` are intact: three pipe-bordered lines,
+/// the delimiter row contains `---`, and `expected_data_row` appears verbatim.
+fn assert_three_row_table_preserved(text: &str, expected_data_row: &str) {
+    let rows: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            let t = line.trim_start();
+            t.starts_with('|') && t.ends_with('|')
+        })
+        .collect();
+    assert_eq!(
+        rows.len(),
+        3,
+        "Expected 3 distinct table rows, got {} in:\n{}",
+        rows.len(),
+        text,
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("---") && row.contains('|')),
+        "Delimiter row missing — table likely reflowed:\n{text}"
+    );
+    assert!(
+        text.contains(expected_data_row),
+        "Expected data row {expected_data_row:?} verbatim in:\n{text}",
+    );
+}
+
+#[test]
+fn test_md013_issue_590_table_in_list_normalize_mode() {
+    // reflow-mode = "normalize" rewrites every paragraph to fill the column
+    // budget. A table nested in a list item must not be folded into prose.
+    let content = "- A list item.\n\n    | Lorem ipsum | dolor sit amet             |\n    | ----------- | -------------- |\n    | consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |\n";
+    let config = r#"
+flavor = "standard"
+
+[MD013]
+line-length = 60
+reflow = true
+reflow-mode = "normalize"
+"#;
+    let after = run_md013_fix(content, config);
+    assert_three_row_table_preserved(
+        &after,
+        "| consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |",
+    );
+}
+
+#[test]
+fn test_md013_issue_590_table_in_list_sentence_per_line_mode() {
+    // reflow-mode = "sentence-per-line" breaks at sentence boundaries; table
+    // pipes are not sentence punctuation but the fix must still leave the
+    // rows alone.
+    let content = "- A list item.\n\n    | Header A | Header B |\n    | -------- | -------- |\n    | First. Second. | Third. Fourth. |\n";
+    let config = r#"
+flavor = "standard"
+
+[MD013]
+line-length = 60
+reflow = true
+reflow-mode = "sentence-per-line"
+"#;
+    let after = run_md013_fix(content, config);
+    assert_three_row_table_preserved(&after, "| First. Second. | Third. Fourth. |");
+}
+
+#[test]
+fn test_md013_issue_590_table_in_list_default_reflow_mode() {
+    // Default reflow only rewraps lines that exceed the limit. The table row
+    // exceeds 40 chars, but it is a table row, not prose — it must be left
+    // alone rather than wrapped on words.
+    let content = "- A list item.\n\n    | Lorem ipsum | dolor sit amet             |\n    | ----------- | -------------- |\n    | consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |\n";
+    let config = r#"
+flavor = "standard"
+
+[MD013]
+line-length = 40
+reflow = true
+"#;
+    let after = run_md013_fix(content, config);
+    assert_three_row_table_preserved(
+        &after,
+        "| consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |",
+    );
+}
+
+#[test]
+fn test_md013_issue_590_table_in_list_mkdocs_flavor() {
+    // mkdocs flavor uses 4-space indent under list items by convention. A
+    // table at that nested level must still be preserved.
+    let content = "- A list item.\n\n    | Lorem ipsum | dolor sit amet             |\n    | ----------- | -------------- |\n    | consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |\n";
+    let config = r#"
+flavor = "mkdocs"
+
+[MD013]
+line-length = 60
+reflow = true
+reflow-mode = "semantic-line-breaks"
+"#;
+    let after = run_md013_fix(content, config);
+    assert_three_row_table_preserved(
+        &after,
+        "| consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |",
+    );
+}
+
+#[test]
+fn test_md013_issue_590_table_in_nested_list_item() {
+    // Table nested inside a child list item (list inside list).
+    let content = "- Parent item.\n    - Child item with a table.\n\n        | Lorem ipsum | dolor sit amet             |\n        | ----------- | -------------- |\n        | consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |\n";
+    let config = r#"
+flavor = "standard"
+
+[MD013]
+line-length = 60
+reflow = true
+reflow-mode = "semantic-line-breaks"
+"#;
+    let after = run_md013_fix(content, config);
+    assert_three_row_table_preserved(
+        &after,
+        "| consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |",
+    );
+}
+
+#[test]
+fn test_md013_issue_590_table_immediately_after_list_marker() {
+    // No blank line between marker and table. This is not a valid GFM table
+    // per spec — a list item with `- | x |` followed by `  | --- |` is
+    // parsed as a paragraph of literal pipes, not a table. The fix must
+    // still leave the content verbatim and not invent a wrap that mangles
+    // pipes mid-line.
+    let content = "- | Lorem ipsum | dolor sit amet             |\n  | ----------- | -------------- |\n  | consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |\n";
+    let config = r#"
+flavor = "standard"
+
+[MD013]
+line-length = 60
+reflow = true
+reflow-mode = "semantic-line-breaks"
+"#;
+    let after = run_md013_fix(content, config);
+
+    // Each pipe-row line must remain on its own line; we accept the first
+    // row prefixed by the list marker (`- | header |`).
+    let pipe_rows: Vec<&str> = after
+        .lines()
+        .filter(|line| line.contains('|') && line.trim_end().ends_with('|'))
+        .collect();
+    assert_eq!(
+        pipe_rows.len(),
+        3,
+        "Expected 3 pipe-row lines, got {} in:\n{after}",
+        pipe_rows.len(),
+    );
+    assert!(
+        after.contains("| ----------- | -------------- |"),
+        "Delimiter row missing in:\n{after}"
+    );
+    assert!(
+        after.contains("| consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |"),
+        "Data row got mangled in:\n{after}"
+    );
+}
