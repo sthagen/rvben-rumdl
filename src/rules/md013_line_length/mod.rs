@@ -1549,6 +1549,7 @@ impl MD013LineLength {
                     DivMarker(String),    // Quarto/Pandoc div markers (::: opening or closing)
                     AdmonitionHeader(String, usize), // header text (e.g. "!!! note") and original indent
                     AdmonitionContent(String, usize), // body content text and original indent
+                    Table(String, usize), // GFM table row, preserved verbatim with original indent
                     Empty,
                 }
 
@@ -1662,6 +1663,12 @@ impl MD013LineLength {
                             // These must be preserved on their own lines for MkDocs Snippets extension
                             else if is_snippet_block_delimiter(&content) {
                                 list_item_lines.push(LineType::SnippetLine(content));
+                            }
+                            // Check if this is a GFM table row. Tables nested inside list
+                            // items must be preserved verbatim — joining them with prose
+                            // breaks the column structure (issue #590).
+                            else if TableUtils::is_potential_table_row(&content) {
+                                list_item_lines.push(LineType::Table(content, indent));
                             } else {
                                 list_item_lines.push(LineType::Content(content));
                             }
@@ -1735,6 +1742,10 @@ impl MD013LineLength {
                         header: String,                      // e.g. "!!! note" or "??? warning \"Title\""
                         header_indent: usize,                // original indent of the header line
                         content_lines: Vec<(String, usize)>, // (text, original_indent) pairs for body lines
+                    },
+                    Table {
+                        lines: Vec<(String, usize)>, // (row text, original_indent) pairs preserved verbatim
+                        has_preceding_blank: bool,   // Whether there was a blank line before this block
                     },
                 }
 
@@ -1832,11 +1843,14 @@ impl MD013LineLength {
                 let mut current_code_block: Vec<(String, usize)> = Vec::new();
                 let mut current_html_block: Vec<String> = Vec::new();
                 let mut html_tag_stack: Vec<String> = Vec::new();
+                let mut current_table: Vec<(String, usize)> = Vec::new();
                 let mut in_code = false;
                 let mut in_html_block = false;
+                let mut in_table = false;
                 let mut had_preceding_blank = false; // Track if we just saw an empty line
                 let mut code_block_has_preceding_blank = false; // Track blank before current code block
                 let mut html_block_has_preceding_blank = false; // Track blank before current HTML block
+                let mut table_has_preceding_blank = false; // Track blank before current table block
 
                 // Track admonition context for block building
                 let mut in_admonition_block = false;
@@ -1860,6 +1874,21 @@ impl MD013LineLength {
                     }
                 };
 
+                // Flush any pending table block into `blocks`. A table row run is
+                // closed by any non-Table line (blank, content, code, etc.).
+                let flush_table = |blocks: &mut Vec<Block>,
+                                   in_table: &mut bool,
+                                   table_lines: &mut Vec<(String, usize)>,
+                                   has_preceding_blank: bool| {
+                    if *in_table {
+                        blocks.push(Block::Table {
+                            lines: std::mem::take(table_lines),
+                            has_preceding_blank,
+                        });
+                        *in_table = false;
+                    }
+                };
+
                 for line in &list_item_lines {
                     match line {
                         LineType::Empty => {
@@ -1871,6 +1900,14 @@ impl MD013LineLength {
                             } else if in_html_block {
                                 // Allow blank lines inside HTML blocks
                                 current_html_block.push(String::new());
+                            } else if in_table {
+                                // Blank line ends the table block
+                                flush_table(
+                                    &mut blocks,
+                                    &mut in_table,
+                                    &mut current_table,
+                                    table_has_preceding_blank,
+                                );
                             } else if !current_paragraph.is_empty() {
                                 blocks.push(Block::Paragraph(current_paragraph.clone()));
                                 current_paragraph.clear();
@@ -1884,6 +1921,12 @@ impl MD013LineLength {
                                 &mut in_admonition_block,
                                 &mut admonition_header,
                                 &mut admonition_content,
+                            );
+                            flush_table(
+                                &mut blocks,
+                                &mut in_table,
+                                &mut current_table,
+                                table_has_preceding_blank,
                             );
                             // Check if we're currently in an HTML block
                             if in_html_block {
@@ -1968,6 +2011,12 @@ impl MD013LineLength {
                                 &mut admonition_header,
                                 &mut admonition_content,
                             );
+                            flush_table(
+                                &mut blocks,
+                                &mut in_table,
+                                &mut current_table,
+                                table_has_preceding_blank,
+                            );
                             if in_html_block {
                                 // Switching from HTML block to code (shouldn't happen normally, but handle it)
                                 blocks.push(Block::Html {
@@ -1998,6 +2047,12 @@ impl MD013LineLength {
                                 &mut in_admonition_block,
                                 &mut admonition_header,
                                 &mut admonition_content,
+                            );
+                            flush_table(
+                                &mut blocks,
+                                &mut in_table,
+                                &mut current_table,
+                                table_has_preceding_blank,
                             );
                             if in_code {
                                 blocks.push(Block::Code {
@@ -2031,6 +2086,12 @@ impl MD013LineLength {
                                 &mut admonition_header,
                                 &mut admonition_content,
                             );
+                            flush_table(
+                                &mut blocks,
+                                &mut in_table,
+                                &mut current_table,
+                                table_has_preceding_blank,
+                            );
                             if in_code {
                                 blocks.push(Block::Code {
                                     lines: current_code_block.clone(),
@@ -2063,6 +2124,12 @@ impl MD013LineLength {
                                 &mut admonition_header,
                                 &mut admonition_content,
                             );
+                            flush_table(
+                                &mut blocks,
+                                &mut in_table,
+                                &mut current_table,
+                                table_has_preceding_blank,
+                            );
                             if in_code {
                                 blocks.push(Block::Code {
                                     lines: current_code_block.clone(),
@@ -2091,6 +2158,12 @@ impl MD013LineLength {
                                 &mut in_admonition_block,
                                 &mut admonition_header,
                                 &mut admonition_content,
+                            );
+                            flush_table(
+                                &mut blocks,
+                                &mut in_table,
+                                &mut current_table,
+                                table_has_preceding_blank,
                             );
                             // Flush other current blocks
                             if in_code {
@@ -2129,6 +2202,41 @@ impl MD013LineLength {
                             }
                             had_preceding_blank = false;
                         }
+                        LineType::Table(content, indent) => {
+                            // Tables are verbatim blocks — flush any other pending state
+                            // before starting (or extending) the table run.
+                            flush_admonition(
+                                &mut blocks,
+                                &mut in_admonition_block,
+                                &mut admonition_header,
+                                &mut admonition_content,
+                            );
+                            if in_code {
+                                blocks.push(Block::Code {
+                                    lines: current_code_block.clone(),
+                                    has_preceding_blank: code_block_has_preceding_blank,
+                                });
+                                current_code_block.clear();
+                                in_code = false;
+                            } else if in_html_block {
+                                blocks.push(Block::Html {
+                                    lines: current_html_block.clone(),
+                                    has_preceding_blank: html_block_has_preceding_blank,
+                                });
+                                current_html_block.clear();
+                                html_tag_stack.clear();
+                                in_html_block = false;
+                            } else if !current_paragraph.is_empty() {
+                                blocks.push(Block::Paragraph(current_paragraph.clone()));
+                                current_paragraph.clear();
+                            }
+                            if !in_table {
+                                in_table = true;
+                                table_has_preceding_blank = had_preceding_blank;
+                            }
+                            current_table.push((content.clone(), *indent));
+                            had_preceding_blank = false;
+                        }
                     }
                 }
 
@@ -2138,6 +2246,12 @@ impl MD013LineLength {
                     &mut in_admonition_block,
                     &mut admonition_header,
                     &mut admonition_content,
+                );
+                flush_table(
+                    &mut blocks,
+                    &mut in_table,
+                    &mut current_table,
+                    table_has_preceding_blank,
                 );
                 if in_code && !current_code_block.is_empty() {
                     blocks.push(Block::Code {
@@ -2218,6 +2332,7 @@ impl MD013LineLength {
                     let has_snippet_lines = blocks.iter().any(|b| matches!(b, Block::SnippetLine(_)));
                     let has_div_markers = blocks.iter().any(|b| matches!(b, Block::DivMarker(_)));
                     let has_admonitions = blocks.iter().any(|b| matches!(b, Block::Admonition { .. }));
+                    let has_tables = blocks.iter().any(|b| matches!(b, Block::Table { .. }));
                     let has_paragraphs = blocks.iter().any(|b| matches!(b, Block::Paragraph(_)));
 
                     // If we have structural blocks but no paragraphs, don't normalize
@@ -2225,7 +2340,8 @@ impl MD013LineLength {
                         || has_semantic_lines
                         || has_snippet_lines
                         || has_div_markers
-                        || has_admonitions)
+                        || has_admonitions
+                        || has_tables)
                         && !has_paragraphs
                     {
                         return false;
@@ -2452,6 +2568,9 @@ impl MD013LineLength {
                                         Block::Code {
                                             has_preceding_blank, ..
                                         } => *has_preceding_blank,
+                                        Block::Table {
+                                            has_preceding_blank, ..
+                                        } => *has_preceding_blank,
                                         Block::SnippetLine(_) | Block::DivMarker(_) => false,
                                         _ => true, // For all other blocks, add blank line
                                     };
@@ -2505,6 +2624,9 @@ impl MD013LineLength {
                                     let next_block = &blocks[block_idx + 1];
                                     let should_add_blank = match next_block {
                                         Block::Code {
+                                            has_preceding_blank, ..
+                                        } => *has_preceding_blank,
+                                        Block::Table {
                                             has_preceding_blank, ..
                                         } => *has_preceding_blank,
                                         Block::SnippetLine(_) | Block::DivMarker(_) => false,
@@ -2570,8 +2692,53 @@ impl MD013LineLength {
                                         Block::Html {
                                             has_preceding_blank, ..
                                         } => *has_preceding_blank,
+                                        Block::Table {
+                                            has_preceding_blank, ..
+                                        } => *has_preceding_blank,
                                         Block::SnippetLine(_) | Block::DivMarker(_) => false,
                                         _ => true, // For all other blocks, add blank line
+                                    };
+                                    if should_add_blank && result.last().is_none_or(|s: &String| !s.is_empty()) {
+                                        result.push(String::new());
+                                    }
+                                }
+                            }
+                            Block::Table {
+                                lines: table_lines,
+                                has_preceding_blank: _,
+                            } => {
+                                // Preserve table rows verbatim with their original indentation.
+                                // Reflowing rows would corrupt column alignment and inject `|`
+                                // characters mid-paragraph (issue #590).
+                                // The leading blank line is emitted by the previous block.
+                                for (idx, (content, orig_indent)) in table_lines.iter().enumerate() {
+                                    if is_first_block && idx == 0 {
+                                        // First line of first block gets the list marker
+                                        result.push(format!(
+                                            "{marker}{}",
+                                            " ".repeat(orig_indent.saturating_sub(marker_len)) + content
+                                        ));
+                                        is_first_block = false;
+                                    } else {
+                                        result.push(format!("{}{}", " ".repeat(*orig_indent), content));
+                                    }
+                                }
+
+                                // Add blank line after table block if there's a next block.
+                                if block_idx < blocks.len() - 1 {
+                                    let next_block = &blocks[block_idx + 1];
+                                    let should_add_blank = match next_block {
+                                        Block::Code {
+                                            has_preceding_blank, ..
+                                        } => *has_preceding_blank,
+                                        Block::Html {
+                                            has_preceding_blank, ..
+                                        } => *has_preceding_blank,
+                                        Block::Table {
+                                            has_preceding_blank, ..
+                                        } => *has_preceding_blank,
+                                        Block::SnippetLine(_) | Block::DivMarker(_) => false,
+                                        _ => true,
                                     };
                                     if should_add_blank && result.last().is_none_or(|s: &String| !s.is_empty()) {
                                         result.push(String::new());
@@ -2755,6 +2922,9 @@ impl MD013LineLength {
                                     let next_block = &blocks[block_idx + 1];
                                     let should_add_blank = match next_block {
                                         Block::Code {
+                                            has_preceding_blank, ..
+                                        } => *has_preceding_blank,
+                                        Block::Table {
                                             has_preceding_blank, ..
                                         } => *has_preceding_blank,
                                         Block::SnippetLine(_) | Block::DivMarker(_) => false,

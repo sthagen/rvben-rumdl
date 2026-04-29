@@ -1086,3 +1086,80 @@ unfixable = ["MD013"]
         "MD013 must not warn on an under-limit list item (second run). Got:\n{second}"
     );
 }
+
+#[test]
+fn test_md013_issue_590_table_inside_list_item_preserved() {
+    // Tables nested inside a list item must not be reflowed as prose, even
+    // under `reflow-mode = "semantic-line-breaks"`. The top-level reflow
+    // path correctly treats table rows as opaque; the list-item path must
+    // mirror that or the rows get joined with `|` literals interleaved.
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("issue_590.md");
+
+    let content = "- A list item.\n\n    | Lorem ipsum | dolor sit amet             |\n    | ----------- | -------------- |\n    | consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |\n";
+    fs::write(&file_path, content).unwrap();
+
+    let config_path = dir.path().join(".rumdl.toml");
+    let config_content = r#"
+flavor = "standard"
+
+[MD013]
+line-length = 60
+reflow = true
+reflow-mode = "semantic-line-breaks"
+"#;
+    fs::write(&config_path, config_content).unwrap();
+
+    let _output = std::process::Command::new(env!("CARGO_BIN_EXE_rumdl"))
+        .arg("check")
+        .arg("--fix")
+        .arg(&file_path)
+        .arg("--config")
+        .arg(&config_path)
+        .output()
+        .expect("Failed to execute rumdl");
+
+    let after = fs::read_to_string(&file_path).unwrap();
+
+    // The three table rows must each remain intact, on separate lines.
+    let rows: Vec<&str> = after
+        .lines()
+        .filter(|line| {
+            let t = line.trim_start();
+            t.starts_with('|') && t.ends_with('|')
+        })
+        .collect();
+    assert_eq!(
+        rows.len(),
+        3,
+        "Issue #590 regression: expected 3 distinct table rows, got {} in:\n{}",
+        rows.len(),
+        after
+    );
+
+    // The delimiter row (separator) must be preserved verbatim with dashes.
+    assert!(
+        rows.iter().any(|row| row.contains("---") && row.contains('|')),
+        "Delimiter row missing — table was likely reflowed: {after}"
+    );
+
+    // The data rows must contain their original cell content side by side,
+    // not folded together with literal `|` characters mid-paragraph.
+    assert!(
+        after.contains("| consectetur adipiscing elit | sed do eiusmod tempor incididunt ut labore |"),
+        "Data row got reflowed — expected verbatim row in:\n{after}"
+    );
+
+    // Idempotence: a second pass must not change anything.
+    let _output = std::process::Command::new(env!("CARGO_BIN_EXE_rumdl"))
+        .arg("check")
+        .arg("--fix")
+        .arg(&file_path)
+        .arg("--config")
+        .arg(&config_path)
+        .output()
+        .expect("Failed to execute rumdl");
+
+    let after_second = fs::read_to_string(&file_path).unwrap();
+    assert_eq!(after, after_second, "MD013 fix must be idempotent for tables in lists");
+}
