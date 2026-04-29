@@ -336,6 +336,10 @@ pub(super) fn normalize_match_path<'a>(
     }
 
     let Ok(canonical_file) = file_path.canonicalize() else {
+        log::debug!(
+            "normalize_match_path: canonicalize failed for {file_path:?}; returning raw path. \
+             Per-file glob patterns may not match (file may not yet exist on disk)."
+        );
         return Cow::Borrowed(file_path);
     };
 
@@ -356,6 +360,11 @@ pub(super) fn normalize_match_path<'a>(
         return Cow::Owned(rel);
     }
 
+    log::debug!(
+        "normalize_match_path: {file_path:?} could not be made relative to \
+         project_root={project_root:?} or cwd={cwd:?}; returning raw absolute path. \
+         Per-file glob patterns will not match this file."
+    );
     Cow::Borrowed(file_path)
 }
 
