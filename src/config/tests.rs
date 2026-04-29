@@ -1517,6 +1517,116 @@ fn test_per_file_flavor_character_class() {
     assert_eq!(flavor, MarkdownFlavor::Standard);
 }
 
+// ==========================================
+// Path normalization robustness tests
+// (regression: per-file-flavor / per-file-ignores must work even when
+// `project_root` was not discovered, as long as the file lives under CWD.
+// This mirrors how rumdl is invoked from CI runners, language servers,
+// and editors that pass absolute paths through the API.)
+// ==========================================
+
+/// Create an absolute file path inside the given temp dir by creating
+/// the parent directories and an empty file at `rel`, then canonicalizing.
+fn make_file(temp: &tempfile::TempDir, rel: &str) -> std::path::PathBuf {
+    let abs = temp.path().join(rel);
+    fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    fs::write(&abs, "").unwrap();
+    abs.canonicalize().unwrap()
+}
+
+#[test]
+fn test_normalize_match_path_uses_project_root() {
+    // Happy path: project_root is set, file is under it. Result is the
+    // path relative to project_root, regardless of where cwd points.
+    let temp = tempdir().unwrap();
+    let cwd = tempdir().unwrap(); // unrelated cwd
+    let file = make_file(&temp, "docs/guide.md");
+    let root = temp.path().canonicalize().unwrap();
+
+    let result = super::types::normalize_match_path(&file, Some(&root), Some(cwd.path()));
+    assert_eq!(result.as_ref(), std::path::Path::new("docs/guide.md"));
+}
+
+#[test]
+fn test_normalize_match_path_falls_back_to_cwd_when_project_root_none() {
+    // The actual fix: when project_root is None but the file is under cwd,
+    // the result must be the path relative to cwd.
+    let temp = tempdir().unwrap();
+    let file = make_file(&temp, "docs/guide.md");
+    let cwd = temp.path().canonicalize().unwrap();
+
+    let result = super::types::normalize_match_path(&file, None, Some(&cwd));
+    assert_eq!(result.as_ref(), std::path::Path::new("docs/guide.md"));
+}
+
+#[test]
+fn test_normalize_match_path_falls_back_to_cwd_when_project_root_unrelated() {
+    // When project_root is set but the file lives outside it (e.g. when the
+    // user invokes rumdl on a file outside the configured project), fall back
+    // to cwd-relative matching rather than blindly using the raw absolute path.
+    let temp = tempdir().unwrap();
+    let elsewhere = tempdir().unwrap();
+    let file = make_file(&temp, "docs/guide.md");
+    let cwd = temp.path().canonicalize().unwrap();
+    let unrelated_root = elsewhere.path().canonicalize().unwrap();
+
+    let result = super::types::normalize_match_path(&file, Some(&unrelated_root), Some(&cwd));
+    assert_eq!(result.as_ref(), std::path::Path::new("docs/guide.md"));
+}
+
+#[test]
+fn test_normalize_match_path_relative_path_passthrough() {
+    // A relative path needs no normalization regardless of project_root or cwd.
+    let temp = tempdir().unwrap();
+    let result = super::types::normalize_match_path(
+        std::path::Path::new("docs/guide.md"),
+        Some(temp.path()),
+        Some(temp.path()),
+    );
+    assert_eq!(result.as_ref(), std::path::Path::new("docs/guide.md"));
+}
+
+#[test]
+fn test_normalize_match_path_nonexistent_file_passthrough() {
+    // Editor/LSP buffers may reference a path that does not exist on disk yet,
+    // so canonicalize() will fail. Such relative paths must still be matchable.
+    let result = super::types::normalize_match_path(std::path::Path::new("docs/draft.md"), None, None);
+    assert_eq!(result.as_ref(), std::path::Path::new("docs/draft.md"));
+}
+
+#[test]
+fn test_normalize_match_path_outside_cwd_returns_raw_path() {
+    // Path is absolute and lives nowhere we can map to relative form.
+    // Returning the raw path is the safe fallback — a relative glob pattern
+    // simply won't match it, which is the desired behavior.
+    let outside = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    let file = make_file(&outside, "docs/elsewhere.md");
+    let cwd_path = cwd.path().canonicalize().unwrap();
+
+    let result = super::types::normalize_match_path(&file, None, Some(&cwd_path));
+    assert_eq!(result.as_ref(), file.as_path());
+}
+
+#[test]
+fn test_per_file_flavor_matches_absolute_path_with_project_root_only_no_cwd() {
+    // End-to-end: the public API must wire normalize_match_path correctly so
+    // that an absolute path under project_root resolves to the override flavor.
+    let temp = tempdir().unwrap();
+    let file = make_file(&temp, "docs/guide.md");
+
+    let mut per_file_flavor = indexmap::IndexMap::new();
+    per_file_flavor.insert("docs/**/*.md".to_string(), MarkdownFlavor::MkDocs);
+    let config = Config {
+        per_file_flavor,
+        project_root: Some(temp.path().canonicalize().unwrap()),
+        ..Default::default()
+    };
+
+    let flavor = config.get_flavor_for_file(&file);
+    assert_eq!(flavor, MarkdownFlavor::MkDocs);
+}
+
 #[test]
 fn test_generate_json_schema() {
     use schemars::schema_for;

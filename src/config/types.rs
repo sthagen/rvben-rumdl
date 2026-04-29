@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use super::flavor::{MarkdownFlavor, normalize_key};
@@ -189,25 +189,8 @@ impl Config {
             return ignored_rules;
         }
 
-        // Normalize the file path to be relative to project_root for pattern matching
-        // This ensures patterns like ".github/file.md" work with absolute paths
-        let path_for_matching: std::borrow::Cow<'_, Path> = if let Some(ref root) = self.project_root {
-            if let Ok(canonical_path) = file_path.canonicalize() {
-                if let Ok(canonical_root) = root.canonicalize() {
-                    if let Ok(relative) = canonical_path.strip_prefix(&canonical_root) {
-                        std::borrow::Cow::Owned(relative.to_path_buf())
-                    } else {
-                        std::borrow::Cow::Borrowed(file_path)
-                    }
-                } else {
-                    std::borrow::Cow::Borrowed(file_path)
-                }
-            } else {
-                std::borrow::Cow::Borrowed(file_path)
-            }
-        } else {
-            std::borrow::Cow::Borrowed(file_path)
-        };
+        let cwd = std::env::current_dir().ok();
+        let path_for_matching = normalize_match_path(file_path, self.project_root.as_deref(), cwd.as_deref());
 
         let cache = self
             .per_file_ignores_cache
@@ -235,24 +218,8 @@ impl Config {
             return self.resolve_flavor_fallback(file_path);
         }
 
-        // Normalize path for matching (same logic as get_ignored_rules_for_file)
-        let path_for_matching: std::borrow::Cow<'_, Path> = if let Some(ref root) = self.project_root {
-            if let Ok(canonical_path) = file_path.canonicalize() {
-                if let Ok(canonical_root) = root.canonicalize() {
-                    if let Ok(relative) = canonical_path.strip_prefix(&canonical_root) {
-                        std::borrow::Cow::Owned(relative.to_path_buf())
-                    } else {
-                        std::borrow::Cow::Borrowed(file_path)
-                    }
-                } else {
-                    std::borrow::Cow::Borrowed(file_path)
-                }
-            } else {
-                std::borrow::Cow::Borrowed(file_path)
-            }
-        } else {
-            std::borrow::Cow::Borrowed(file_path)
-        };
+        let cwd = std::env::current_dir().ok();
+        let path_for_matching = normalize_match_path(file_path, self.project_root.as_deref(), cwd.as_deref());
 
         let cache = self
             .per_file_flavor_cache
@@ -337,6 +304,59 @@ impl Config {
 
         merged
     }
+}
+
+/// Normalize a file path for matching against a glob pattern from configuration.
+///
+/// Glob patterns in `per-file-ignores` and `per-file-flavor` are written relative
+/// to the project root (e.g. `docs/**/*.md`), and the underlying matcher uses
+/// `literal_separator(true)` so an absolute path like `/home/user/proj/docs/x.md`
+/// will not match `docs/**/*.md`. This helper produces the form the glob expects:
+///
+/// 1. **Relative path** → return as-is.
+/// 2. **Absolute path under `project_root`** → return path relative to `project_root`.
+/// 3. **Absolute path under `cwd`** → return path relative to `cwd`. This is the
+///    safety net for invocations where `project_root` could not be discovered
+///    (no `.git` upward, LSP/CLI calls outside a project) but the file still
+///    lives somewhere under the working directory.
+/// 4. **Anywhere else** → return the raw path. A relative glob simply won't
+///    match it, which is the desired outcome for files outside any known root.
+///
+/// All canonicalization failures degrade gracefully to step 4 so editor buffers
+/// and pre-creation paths still flow through without panicking.
+pub(super) fn normalize_match_path<'a>(
+    file_path: &'a Path,
+    project_root: Option<&Path>,
+    cwd: Option<&Path>,
+) -> std::borrow::Cow<'a, Path> {
+    use std::borrow::Cow;
+
+    if file_path.is_relative() {
+        return Cow::Borrowed(file_path);
+    }
+
+    let Ok(canonical_file) = file_path.canonicalize() else {
+        return Cow::Borrowed(file_path);
+    };
+
+    let strip_against = |base: &Path| -> Option<PathBuf> {
+        let canonical_base = base.canonicalize().ok()?;
+        canonical_file.strip_prefix(&canonical_base).ok().map(Path::to_path_buf)
+    };
+
+    if let Some(root) = project_root
+        && let Some(rel) = strip_against(root)
+    {
+        return Cow::Owned(rel);
+    }
+
+    if let Some(working_dir) = cwd
+        && let Some(rel) = strip_against(working_dir)
+    {
+        return Cow::Owned(rel);
+    }
+
+    Cow::Borrowed(file_path)
 }
 
 /// Convert a serde_json::Value to a toml::Value
