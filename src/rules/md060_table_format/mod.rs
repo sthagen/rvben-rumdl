@@ -849,11 +849,11 @@ impl MD060TableFormat {
 
                 for (row_idx, line) in stripped_lines.iter().enumerate() {
                     let cells = Self::parse_table_row_with_flavor(line, flavor);
-                    if row_idx == 1 {
-                        if let Some(widths) = &header_widths {
-                            result.push(Self::format_delimiter_aligned_to_header(&cells, widths, compact));
-                            continue;
-                        }
+                    if row_idx == 1
+                        && let Some(widths) = &header_widths
+                    {
+                        result.push(Self::format_delimiter_aligned_to_header(&cells, widths, compact));
+                        continue;
                     }
                     result.push(if compact {
                         Self::format_table_compact(&cells)

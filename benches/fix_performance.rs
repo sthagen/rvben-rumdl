@@ -287,7 +287,7 @@ fn bench_fix_performance(c: &mut Criterion) {
 
     // MD027 - Multiple spaces after blockquote
     c.bench_function("MD027 fix", |b| {
-        let rule = MD027MultipleSpacesBlockquote;
+        let rule = MD027MultipleSpacesBlockquote::default();
         b.iter(|| rule.fix(black_box(&ctx)))
     });
 
