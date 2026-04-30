@@ -1044,6 +1044,7 @@ impl From<SourcedConfig<ConfigValidated>> for Config {
             project_root: sourced.project_root,
             per_file_ignores_cache: Arc::new(OnceLock::new()),
             per_file_flavor_cache: Arc::new(OnceLock::new()),
+            canonical_project_root_cache: Arc::new(OnceLock::new()),
         };
 
         // Apply per-rule `enabled = true/false` to global enable/disable lists
