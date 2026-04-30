@@ -1609,6 +1609,27 @@ fn test_normalize_match_path_outside_cwd_returns_raw_path() {
 }
 
 #[test]
+fn test_normalize_match_path_silent_fallback_when_project_root_and_cwd_both_unrelated() {
+    // Comprehensive silent-fallback case: file lives outside BOTH project_root
+    // and cwd. The function must return the raw absolute path so the
+    // downstream glob simply doesn't match — never panic, never short-circuit
+    // to a wrong relative form.
+    let project = tempdir().unwrap();
+    let working = tempdir().unwrap();
+    let elsewhere = tempdir().unwrap();
+    let file = make_file(&elsewhere, "docs/orphan.md");
+    let project_root = project.path().canonicalize().unwrap();
+    let cwd = working.path().canonicalize().unwrap();
+
+    let result = super::types::normalize_match_path(&file, Some(&project_root), Some(&cwd));
+    assert_eq!(
+        result.as_ref(),
+        file.as_path(),
+        "silent fallback must return the raw absolute path verbatim",
+    );
+}
+
+#[test]
 fn test_per_file_flavor_matches_absolute_path_with_project_root_only_no_cwd() {
     // End-to-end: the public API must wire normalize_match_path correctly so
     // that an absolute path under project_root resolves to the override flavor.
@@ -1709,6 +1730,160 @@ fn test_normalize_match_path_globset_round_trip() {
         glob.is_match(result.as_ref()),
         "globset must match {result:?} against `docs/**/*.md`",
     );
+}
+
+#[test]
+fn test_canonical_project_root_cache_returns_stable_reference() {
+    // The cache contract is: subsequent calls return a borrow of the same
+    // stored `PathBuf`, not a freshly canonicalized one. We verify this
+    // structurally by comparing pointers — deterministic, no timing.
+    let temp = tempdir().unwrap();
+    let config = Config {
+        project_root: Some(temp.path().to_path_buf()),
+        ..Config::default()
+    };
+
+    let first: *const std::path::Path = config.canonical_project_root().expect("project_root canonicalizes");
+    let second: *const std::path::Path = config.canonical_project_root().expect("cache hit");
+
+    assert!(
+        std::ptr::eq(first, second),
+        "cached lookup must return a borrow of the stored PathBuf, not a fresh canonicalization",
+    );
+}
+
+#[test]
+fn test_first_call_warn_else_debug_returns_warn_then_debug() {
+    use std::sync::OnceLock;
+
+    let latch: OnceLock<()> = OnceLock::new();
+
+    assert_eq!(
+        super::types::first_call_warn_else_debug(&latch),
+        log::Level::Warn,
+        "first call must surface at warn level",
+    );
+    assert_eq!(
+        super::types::first_call_warn_else_debug(&latch),
+        log::Level::Debug,
+        "second call must downgrade to debug",
+    );
+    assert_eq!(
+        super::types::first_call_warn_else_debug(&latch),
+        log::Level::Debug,
+        "subsequent calls remain at debug",
+    );
+}
+
+#[test]
+fn test_format_silent_fallback_message_renders_paths_with_display_formatting() {
+    // Paths must appear via Display (not Debug) so the diagnostic doesn't
+    // contain stray quote characters that came from Debug's PathBuf impl.
+    use std::path::PathBuf;
+
+    let file = PathBuf::from("/elsewhere/notes/draft.md");
+    let root = PathBuf::from("/projects/myrepo");
+    let cwd = PathBuf::from("/tmp/build");
+
+    let msg = super::types::format_silent_fallback_message(&file, Some(&root), Some(&cwd));
+
+    assert_eq!(
+        msg,
+        "Per-file glob patterns will not match /elsewhere/notes/draft.md: \
+         file is outside project_root (/projects/myrepo) and cwd (/tmp/build)",
+        "exact message format is part of the diagnostic contract; got: {msg}",
+    );
+    assert!(
+        !msg.contains('"'),
+        "Display formatting must not emit Debug-style quotes; got: {msg}",
+    );
+}
+
+#[test]
+fn test_format_silent_fallback_message_renders_unset_root_and_cwd_explicitly() {
+    // When project_root and/or cwd are unavailable the diagnostic must
+    // surface that explicitly as "(unset)" rather than leaking Rust's
+    // `None` Debug representation.
+    use std::path::PathBuf;
+
+    let file = PathBuf::from("/anywhere/file.md");
+    let msg = super::types::format_silent_fallback_message(&file, None, None);
+
+    assert_eq!(
+        msg,
+        "Per-file glob patterns will not match /anywhere/file.md: \
+         file is outside project_root (<unset>) and cwd (<unset>)",
+    );
+    assert!(
+        !msg.contains("None"),
+        "must not surface Rust's Debug `None`; got: {msg}"
+    );
+}
+
+#[test]
+fn test_format_silent_fallback_message_renders_partial_unset() {
+    // Mixed Some/None must render each independently — the placeholder
+    // should appear only where it's actually unset.
+    use std::path::PathBuf;
+
+    let file = PathBuf::from("/file.md");
+    let root = PathBuf::from("/projects/repo");
+
+    let only_root = super::types::format_silent_fallback_message(&file, Some(&root), None);
+    assert!(only_root.contains("project_root (/projects/repo)"), "got: {only_root}");
+    assert!(only_root.contains("cwd (<unset>)"), "got: {only_root}");
+
+    let only_cwd = super::types::format_silent_fallback_message(&file, None, Some(&root));
+    assert!(only_cwd.contains("project_root (<unset>)"), "got: {only_cwd}");
+    assert!(only_cwd.contains("cwd (/projects/repo)"), "got: {only_cwd}");
+}
+
+#[test]
+fn test_first_call_warn_else_debug_independent_latches() {
+    // Each latch tracks its own first-call state. A fresh latch must not
+    // be influenced by a different latch having already been set.
+    use std::sync::OnceLock;
+
+    let latch_a: OnceLock<()> = OnceLock::new();
+    let latch_b: OnceLock<()> = OnceLock::new();
+
+    assert_eq!(super::types::first_call_warn_else_debug(&latch_a), log::Level::Warn);
+    assert_eq!(super::types::first_call_warn_else_debug(&latch_a), log::Level::Debug);
+
+    assert_eq!(
+        super::types::first_call_warn_else_debug(&latch_b),
+        log::Level::Warn,
+        "latch_b is independent of latch_a",
+    );
+}
+
+#[test]
+fn test_canonical_project_root_cache_shared_across_clones() {
+    // `Config: Clone` and the cache is wrapped in `Arc<OnceLock<_>>` so a
+    // value computed by any clone is observable to all. Verify that:
+    // a clone created BEFORE the cache is populated still sees the cached
+    // value once the original populates it.
+    let temp = tempdir().unwrap();
+    let root = temp.path().to_path_buf();
+
+    let original = Config {
+        project_root: Some(root.clone()),
+        ..Config::default()
+    };
+    let clone_before_init = original.clone();
+
+    // Populate via the original.
+    let canonical = original
+        .canonical_project_root()
+        .expect("project_root canonicalizes")
+        .to_path_buf();
+
+    // The pre-init clone must observe the same cached value without
+    // re-canonicalizing, because both share the same `Arc<OnceLock<_>>`.
+    let observed = clone_before_init
+        .canonical_project_root()
+        .expect("clone observes cached value");
+    assert_eq!(observed, canonical.as_path());
 }
 
 #[test]

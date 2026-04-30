@@ -148,3 +148,7 @@ harness = false
 [[bench]]
 name = "simple_fix_bench"
 harness = false
+
+[[bench]]
+name = "config_per_file_lookup"
+harness = false
