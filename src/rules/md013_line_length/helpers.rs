@@ -10,6 +10,34 @@ static INLINE_LINK_RE: LazyLock<Regex> =
 /// Regex for standalone reference-style link/image: `[text][ref]` or `![alt][ref]`
 static REF_LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^!?\[(?:[^\]\\]|\\.)*\]\[[^\]]*\]$").unwrap());
 
+/// Mirror of markdownlint's `notWrappableRe = /^(?:[#>\s]*\s)?\S*$/`.
+///
+/// A line is "unwrappable" if, after an optional run of `#`, `>`, or
+/// whitespace characters terminated by whitespace, the rest of the line is
+/// a single solid non-whitespace token (or empty). Such lines cannot be
+/// shortened by wrapping and are exempt under stern mode.
+pub(crate) fn is_unwrappable_line(line: &str) -> bool {
+    // Walk the leading run of `#`, `>`, and whitespace characters. Track the
+    // byte offset just past the last whitespace character seen so we know
+    // where the trailing token starts.
+    let mut last_ws_end: Option<usize> = None;
+    for (idx, ch) in line.char_indices() {
+        if ch == '#' || ch == '>' {
+            // Heading/blockquote markers are valid in the prefix run but
+            // don't satisfy the trailing-whitespace requirement.
+        } else if ch.is_whitespace() {
+            last_ws_end = Some(idx + ch.len_utf8());
+        } else {
+            break;
+        }
+    }
+    // The non-capturing prefix group must end with whitespace; if there was
+    // no whitespace in the prefix run, the prefix didn't match and the
+    // entire line must be a single non-whitespace token.
+    let rest_start = last_ws_end.unwrap_or(0);
+    line[rest_start..].chars().all(|c| !c.is_whitespace())
+}
+
 /// Check if a line ends with a hard break (either two spaces or backslash)
 ///
 /// CommonMark supports two formats for hard line breaks:

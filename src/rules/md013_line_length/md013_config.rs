@@ -81,6 +81,27 @@ pub struct MD013Config {
     #[serde(default)]
     pub strict: bool,
 
+    /// Stern mode - like strict, but lines that consist of a single
+    /// non-whitespace token (optionally prefixed by heading/blockquote
+    /// markers) are still permitted. Mirrors markdownlint's `stern` option.
+    /// Default: false.
+    #[serde(default)]
+    pub stern: bool,
+
+    /// Per-context maximum line length for headings.
+    ///
+    /// `None` (unset) falls back to `line_length`. `Some(0)` means "no limit
+    /// for headings". Mirrors markdownlint's `heading_line_length`.
+    #[serde(default, alias = "heading_line_length")]
+    pub heading_line_length: Option<LineLength>,
+
+    /// Per-context maximum line length for code blocks (fenced or indented).
+    ///
+    /// `None` (unset) falls back to `line_length`. `Some(0)` means "no limit
+    /// for code blocks". Mirrors markdownlint's `code_block_line_length`.
+    #[serde(default, alias = "code_block_line_length")]
+    pub code_block_line_length: Option<LineLength>,
+
     /// Enable text reflow to wrap long lines (default: false)
     #[serde(default, alias = "enable_reflow", alias = "enable-reflow")]
     pub reflow: bool,
@@ -154,6 +175,9 @@ impl Default for MD013Config {
             paragraphs: default_paragraphs(),
             blockquotes: default_blockquotes(),
             strict: false,
+            stern: false,
+            heading_line_length: None,
+            code_block_line_length: None,
             reflow: false,
             reflow_mode: ReflowMode::default(),
             length_mode: LengthMode::default(),
@@ -164,6 +188,39 @@ impl Default for MD013Config {
 }
 
 impl MD013Config {
+    /// Effective line-length budget for heading lines.
+    /// Falls back to `line_length` when `heading_line_length` is unset.
+    pub fn effective_heading_line_length(&self) -> LineLength {
+        self.heading_line_length.unwrap_or(self.line_length)
+    }
+
+    /// Effective line-length budget for fenced or indented code-block lines.
+    /// Falls back to `line_length` when `code_block_line_length` is unset.
+    pub fn effective_code_block_line_length(&self) -> LineLength {
+        self.code_block_line_length.unwrap_or(self.line_length)
+    }
+
+    /// Smallest applicable line-length budget across all contexts. Used to
+    /// pre-filter candidate lines: any line shorter than this can never
+    /// violate, regardless of which context it falls under.
+    pub fn min_effective_line_length(&self) -> LineLength {
+        let mut limits: Vec<LineLength> = vec![self.line_length];
+        if let Some(h) = self.heading_line_length {
+            limits.push(h);
+        }
+        if let Some(c) = self.code_block_line_length {
+            limits.push(c);
+        }
+        // "Unlimited" (0) is the laxest possible budget, so it must not win
+        // the minimum unless all budgets are unlimited.
+        let bounded: Vec<LineLength> = limits.iter().copied().filter(|l| !l.is_unlimited()).collect();
+        if bounded.is_empty() {
+            LineLength::from_const(0)
+        } else {
+            bounded.into_iter().min_by_key(|l| l.get()).unwrap()
+        }
+    }
+
     /// Convert abbreviations Vec to Option for ReflowOptions
     /// Empty Vec means "use defaults only" so it maps to None
     pub fn abbreviations_for_reflow(&self) -> Option<Vec<String>> {
@@ -290,6 +347,9 @@ mod tests {
             paragraphs: true,
             blockquotes: true,
             strict: false,
+            stern: false,
+            heading_line_length: None,
+            code_block_line_length: None,
             reflow: true,
             reflow_mode: ReflowMode::SentencePerLine,
             length_mode: LengthMode::default(),

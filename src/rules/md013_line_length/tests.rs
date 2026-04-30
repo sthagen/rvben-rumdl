@@ -2639,6 +2639,9 @@ fn test_paragraphs_false_skips_regular_text() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -2671,6 +2674,9 @@ fn test_paragraphs_false_still_checks_code_blocks() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -2704,6 +2710,9 @@ fn test_paragraphs_false_still_checks_headings() {
         tables: true,
         headings: true, // But DO check headings
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -2735,6 +2744,9 @@ fn test_paragraphs_false_with_reflow_sentence_per_line() {
         tables: true,
         headings: false,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SentencePerLine,
         length_mode: LengthMode::default(),
@@ -2766,6 +2778,9 @@ fn test_paragraphs_true_checks_regular_text() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -2797,6 +2812,9 @@ fn test_line_length_zero_disables_all_checks() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -2828,6 +2846,9 @@ fn test_line_length_zero_with_headings() {
         tables: true,
         headings: true, // Even with headings enabled
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -2859,6 +2880,9 @@ fn test_line_length_zero_with_code_blocks() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -2890,6 +2914,9 @@ fn test_line_length_zero_with_sentence_per_line_reflow() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SentencePerLine,
         length_mode: LengthMode::default(),
@@ -2949,6 +2976,9 @@ Final paragraph.
         paragraphs: true,
         blockquotes: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SentencePerLine,
         length_mode: LengthMode::default(),
@@ -3012,6 +3042,9 @@ fn test_reflow_preserves_mkdocstrings_autodoc_block() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SemanticLineBreaks,
         length_mode: LengthMode::default(),
@@ -3041,6 +3074,9 @@ fn test_reflow_preserves_mkdocstrings_with_identifier() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SentencePerLine,
         length_mode: LengthMode::default(),
@@ -3071,6 +3107,9 @@ fn test_reflow_preserves_mkdocstrings_surrounded_by_paragraphs() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SemanticLineBreaks,
         length_mode: LengthMode::default(),
@@ -3104,6 +3143,9 @@ fn test_reflow_mkdocstrings_not_detected_in_standard_flavor() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SemanticLineBreaks,
         length_mode: LengthMode::default(),
@@ -3130,6 +3172,9 @@ fn test_reflow_preserves_mkdocstrings_with_blank_line_in_block() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SemanticLineBreaks,
         length_mode: LengthMode::default(),
@@ -4384,6 +4429,9 @@ fn test_reflow_admonition_in_list_item_basic() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4443,6 +4491,9 @@ fn test_reflow_collapsible_admonition_in_list_item() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4494,6 +4545,9 @@ fn test_reflow_multiple_admonitions_in_list_item() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4567,6 +4621,9 @@ fn test_reflow_admonition_short_content_preserved() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4609,6 +4666,9 @@ fn test_reflow_admonition_with_multiple_paragraphs() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4673,6 +4733,9 @@ fn test_reflow_admonition_not_in_standard_flavor() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4717,6 +4780,9 @@ fn test_reflow_admonition_idempotent() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4766,6 +4832,9 @@ fn test_reflow_admonition_only_in_list_no_long_text() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4820,6 +4889,9 @@ fn test_reflow_content_after_admonition_in_list_item() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4879,6 +4951,9 @@ fn test_reflow_content_after_admonition_short_lines() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4922,6 +4997,9 @@ fn test_reflow_multiple_blocks_after_admonition() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -4973,6 +5051,9 @@ fn test_reflow_admonition_empty_body() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -5018,6 +5099,9 @@ fn test_reflow_admonition_no_blank_line_before_body() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -5067,6 +5151,9 @@ fn test_reflow_admonition_body_indent_preserved() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -5122,6 +5209,9 @@ fn test_reflow_admonition_with_code_block_in_list_item() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -5182,6 +5272,9 @@ fn test_reflow_admonition_with_tilde_fence_in_list_item() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -5236,6 +5329,9 @@ fn test_reflow_admonition_with_multiple_code_blocks_in_list_item() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -5298,6 +5394,9 @@ fn test_reflow_admonition_code_block_idempotent() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -5345,6 +5444,9 @@ fn test_reflow_tab_container_in_list_item() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::Default,
         length_mode: LengthMode::default(),
@@ -5985,6 +6087,9 @@ fn test_paragraphs_false_skips_blockquote_content() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -6016,6 +6121,9 @@ fn test_blockquotes_false_skips_blockquote_content() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -6047,6 +6155,9 @@ fn test_blockquotes_true_paragraphs_true_checks_blockquotes() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -6077,6 +6188,9 @@ fn test_blockquotes_false_still_checks_regular_paragraphs() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -6107,6 +6221,9 @@ fn test_blockquotes_false_paragraphs_false_skips_blockquotes() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -6153,6 +6270,9 @@ fn test_nested_blockquote_skipped_when_blockquotes_false() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -6183,6 +6303,9 @@ fn test_paragraphs_false_skips_nested_blockquote() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -6214,6 +6337,9 @@ fn test_blockquotes_false_skips_reflow_warnings() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SentencePerLine,
         length_mode: LengthMode::default(),
@@ -6245,6 +6371,9 @@ fn test_paragraphs_false_skips_blockquote_reflow_warnings() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SentencePerLine,
         length_mode: LengthMode::default(),
@@ -6276,6 +6405,9 @@ fn test_blockquotes_true_with_reflow_still_warns() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SentencePerLine,
         length_mode: LengthMode::default(),
@@ -6306,6 +6438,9 @@ fn test_blockquotes_false_skips_lazy_continuation() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -6336,6 +6471,9 @@ fn test_blockquotes_false_reflow_skips_lazy_continuation() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: true,
         reflow_mode: ReflowMode::SentencePerLine,
         length_mode: LengthMode::default(),
@@ -6367,6 +6505,9 @@ fn test_blockquotes_false_paragraph_after_blockquote_still_warns() {
         tables: true,
         headings: true,
         strict: false,
+        stern: false,
+        heading_line_length: None,
+        code_block_line_length: None,
         reflow: false,
         reflow_mode: ReflowMode::default(),
         length_mode: LengthMode::default(),
@@ -6898,4 +7039,311 @@ fn test_normalize_mode_list_item_line_length_zero_no_warning() {
         result.is_empty(),
         "line-length = 0 must suppress MD013 length warnings on list items even when reflow would restructure; got: {result:?}"
     );
+}
+
+// -----------------------------------------------------------------------------
+// markdownlint parity: heading_line_length, code_block_line_length, stern
+// -----------------------------------------------------------------------------
+
+fn make_rule(config: MD013Config) -> MD013LineLength {
+    MD013LineLength::from_config_struct(config)
+}
+
+#[test]
+fn test_md013_heading_line_length_loosens_for_headings_only() {
+    // heading_line_length = 200 means headings get a 200-char budget
+    // even though body lines still use line_length = 50.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(50),
+        heading_line_length: Some(crate::types::LineLength::from_const(200)),
+        strict: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let long_heading = format!("# {}", "h".repeat(120));
+    let long_body = "x".repeat(120);
+    let content = format!("{long_heading}\n\n{long_body}\n");
+    let ctx = LintContext::new(&content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "heading_line_length should permit the heading and only flag the body line, got {result:?}"
+    );
+    assert_eq!(result[0].line, 3, "violation must be on the body line");
+}
+
+#[test]
+fn test_md013_heading_line_length_tightens_for_headings_only() {
+    // heading_line_length stricter than line_length: the heading is flagged
+    // even though it would be fine under the document-wide budget.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(200),
+        heading_line_length: Some(crate::types::LineLength::from_const(20)),
+        strict: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let content = "# This heading is way too long for the heading budget\n\nshort body line\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "stricter heading_line_length should flag the heading, got {result:?}"
+    );
+    assert_eq!(result[0].line, 1);
+    assert!(
+        result[0].message.contains("exceeds 20 characters"),
+        "warning should reference the heading-specific limit, got {:?}",
+        result[0].message
+    );
+}
+
+#[test]
+fn test_md013_code_block_line_length_loosens_for_code_only() {
+    // code_block_line_length = 300 lets code blocks have very long lines
+    // (URLs, tokens, etc.) while body text stays at 50.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(50),
+        code_block_line_length: Some(crate::types::LineLength::from_const(300)),
+        strict: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let long_code = "x".repeat(120);
+    let long_body = "y".repeat(120);
+    let content = format!("```\n{long_code}\n```\n\n{long_body}\n");
+    let ctx = LintContext::new(&content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "code_block_line_length should exempt the fenced code line and only flag the body, got {result:?}"
+    );
+    assert_eq!(result[0].line, 5, "violation must be on the body line");
+}
+
+#[test]
+fn test_md013_code_block_line_length_tightens_for_code_only() {
+    // code_block_line_length stricter than line_length: code blocks flagged
+    // even though body lines of the same length pass.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(200),
+        code_block_line_length: Some(crate::types::LineLength::from_const(20)),
+        strict: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let content = "```\nthis line in the code block is way past twenty\n```\n\nshort body\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "stricter code_block_line_length should flag the code line, got {result:?}"
+    );
+    assert_eq!(result[0].line, 2);
+    assert!(
+        result[0].message.contains("exceeds 20 characters"),
+        "warning should reference the code-block-specific limit, got {:?}",
+        result[0].message
+    );
+}
+
+#[test]
+fn test_md013_stern_flags_wrappable_long_lines() {
+    // stern mode: a line that has whitespace before the limit is "wrappable"
+    // and gets flagged, even though default mode would forgive the trailing
+    // long token.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(20),
+        stern: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    // 24 chars, has a space — wrappable. Default mode would forgive the
+    // trailing token; stern mode flags it.
+    let content = "this line is wrappable here\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "stern should flag wrappable long lines that default mode forgives, got {result:?}"
+    );
+}
+
+#[test]
+fn test_md013_stern_allows_unwrappable_lines() {
+    // stern mode: a line that is a single non-whitespace token (no spaces
+    // anywhere) cannot be wrapped, so stern allows it even when long.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(20),
+        stern: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let content = "supercalifragilisticexpialidocious-and-then-some\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert!(
+        result.is_empty(),
+        "stern must permit single-token lines that cannot be wrapped, got {result:?}"
+    );
+}
+
+#[test]
+fn test_md013_stern_allows_unwrappable_heading_and_blockquote() {
+    // The notWrappableRe pattern also matches "# token" and "> token" —
+    // headings/blockquotes whose content is one solid token.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(20),
+        stern: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let content = "# supercalifragilisticexpialidocious\n\n> looooooooooooooooooooong-quote-token\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert!(
+        result.is_empty(),
+        "stern must permit unwrappable heading/blockquote single-token lines, got {result:?}"
+    );
+}
+
+#[test]
+fn test_md013_stern_strict_takes_precedence() {
+    // When both strict and stern are true, strict semantics win (no
+    // exceptions whatsoever).
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(20),
+        strict: true,
+        stern: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let content = "supercalifragilisticexpialidocious-and-then-some\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "strict must override stern's unwrappable exemption, got {result:?}"
+    );
+}
+
+#[test]
+fn test_md013_heading_line_length_unset_falls_back_to_line_length() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(20),
+        heading_line_length: None,
+        strict: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let content = "# This heading is well past twenty chars\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "unset heading_line_length must fall back to line_length, got {result:?}"
+    );
+    assert!(result[0].message.contains("exceeds 20 characters"));
+}
+
+#[test]
+fn test_md013_code_block_line_length_unset_falls_back_to_line_length() {
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(20),
+        code_block_line_length: None,
+        strict: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let content = "```\nthis fenced code line is way too long for twenty\n```\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "unset code_block_line_length must fall back to line_length, got {result:?}"
+    );
+    assert!(result[0].message.contains("exceeds 20 characters"));
+}
+
+#[test]
+fn test_md013_combined_three_distinct_limits() {
+    // Headings 100, code 200, body 50 — three distinct budgets.
+    let config = MD013Config {
+        line_length: crate::types::LineLength::from_const(50),
+        heading_line_length: Some(crate::types::LineLength::from_const(100)),
+        code_block_line_length: Some(crate::types::LineLength::from_const(200)),
+        strict: true,
+        ..MD013Config::default()
+    };
+    let rule = make_rule(config);
+    let heading = format!("# {}", "h".repeat(80)); // 82 chars, under 100
+    let code = "c".repeat(150); // 150 chars, under 200
+    let body = "b".repeat(80); // 80 chars, over 50
+    let content = format!("{heading}\n\n```\n{code}\n```\n\n{body}\n");
+    let ctx = LintContext::new(&content, MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+    assert_eq!(
+        result.len(),
+        1,
+        "only the body line should violate when each context has its own budget, got {result:?}"
+    );
+    assert_eq!(result[0].line, 7);
+    assert!(result[0].message.contains("exceeds 50 characters"));
+}
+
+#[test]
+fn test_md013_stern_kebab_case_parses() {
+    let toml_str = "stern = true\n";
+    let config: MD013Config = toml::from_str(toml_str).unwrap();
+    assert!(config.stern);
+}
+
+#[test]
+fn test_md013_heading_line_length_kebab_case_parses() {
+    let toml_str = "heading-line-length = 120\n";
+    let config: MD013Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.heading_line_length.map(crate::types::LineLength::get), Some(120));
+}
+
+#[test]
+fn test_md013_code_block_line_length_kebab_case_parses() {
+    let toml_str = "code-block-line-length = 120\n";
+    let config: MD013Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(
+        config.code_block_line_length.map(crate::types::LineLength::get),
+        Some(120)
+    );
+}
+
+#[test]
+fn test_md013_heading_line_length_snake_case_alias_parses() {
+    let toml_str = "heading_line_length = 120\n";
+    let config: MD013Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.heading_line_length.map(crate::types::LineLength::get), Some(120));
+}
+
+#[test]
+fn test_md013_code_block_line_length_snake_case_alias_parses() {
+    let toml_str = "code_block_line_length = 120\n";
+    let config: MD013Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(
+        config.code_block_line_length.map(crate::types::LineLength::get),
+        Some(120)
+    );
+}
+
+#[test]
+fn test_md013_new_options_default_to_unset_or_false() {
+    let config = MD013Config::default();
+    assert!(config.heading_line_length.is_none());
+    assert!(config.code_block_line_length.is_none());
+    assert!(!config.stern);
 }

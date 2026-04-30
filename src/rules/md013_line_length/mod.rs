@@ -25,7 +25,8 @@ use crate::utils::is_template_directive_only;
 use block_builder::{Block, BlockBuilder};
 use helpers::{
     extract_list_marker_and_content, has_hard_break, is_github_alert_marker, is_horizontal_rule, is_html_only_line,
-    is_list_item, is_standalone_link_or_image_line, split_into_segments, trim_preserving_hard_break,
+    is_list_item, is_standalone_link_or_image_line, is_unwrappable_line, split_into_segments,
+    trim_preserving_hard_break,
 };
 pub use md013_config::MD013Config;
 use md013_config::{LengthMode, ReflowMode};
@@ -56,6 +57,9 @@ impl MD013LineLength {
                 paragraphs: true,  // Default to true for backwards compatibility
                 blockquotes: true, // Default to true for backwards compatibility
                 strict,
+                stern: false,
+                heading_line_length: None,
+                code_block_line_length: None,
                 reflow: false,
                 reflow_mode: ReflowMode::default(),
                 length_mode: LengthMode::default(),
@@ -141,13 +145,23 @@ impl MD013LineLength {
             return false;
         }
 
-        // Quick check: if total content is shorter than line limit, definitely skip
-        if ctx.content.len() <= config.line_length.get() {
+        // Use the smallest applicable budget across line/heading/code-block
+        // contexts so a stricter context-specific limit doesn't get masked by
+        // the document-wide budget.
+        let min_limit = config.min_effective_line_length();
+        if min_limit.is_unlimited() {
+            return true;
+        }
+        let min_limit_bytes = min_limit.get();
+
+        // Quick check: if total content is shorter than the smallest line limit,
+        // definitely skip.
+        if ctx.content.len() <= min_limit_bytes {
             return true;
         }
 
-        // Skip if no line exceeds the limit
-        !ctx.lines.iter().any(|line| line.byte_len > config.line_length.get())
+        // Skip if no line exceeds the smallest applicable limit.
+        !ctx.lines.iter().any(|line| line.byte_len > min_limit_bytes)
     }
 
     fn normalize_mode_needs_reflow<'a, I>(&self, lines: I, config: &MD013Config) -> bool
@@ -241,9 +255,13 @@ impl Rule for MD013LineLength {
         // Skip all line length checks, but still allow reflow if enabled
         let skip_length_checks = effective_config.line_length.is_unlimited();
 
-        // Pre-filter lines that could be problematic to avoid processing all lines
+        // Pre-filter lines that could be problematic to avoid processing all lines.
+        // Use the smallest applicable budget across line/heading/code-block contexts
+        // so candidates aren't dropped when a stricter context-specific budget applies.
+        let prefilter_limit = effective_config.min_effective_line_length();
+        let prefilter_skip = prefilter_limit.is_unlimited();
         let mut candidate_lines = Vec::new();
-        if !skip_length_checks {
+        if !skip_length_checks && !prefilter_skip {
             for (line_idx, line_info) in ctx.lines.iter().enumerate() {
                 // Skip front matter - it should never be linted
                 if line_info.in_front_matter {
@@ -251,7 +269,7 @@ impl Rule for MD013LineLength {
                 }
 
                 // Quick length check first
-                if line_info.byte_len > effective_config.line_length.get() {
+                if line_info.byte_len > prefilter_limit.get() {
                     candidate_lines.push(line_idx);
                 }
             }
@@ -299,14 +317,39 @@ impl Rule for MD013LineLength {
             // Calculate actual line length (used in warning messages)
             let effective_length = self.calculate_effective_length(line);
 
-            // Use single line length limit for all content
-            let line_limit = effective_config.line_length.get();
+            // Pick the context-specific limit: heading > code-block > paragraph.
+            // Headings dominate over code-block context if a setext underline ever
+            // overlaps a fenced range (defensive — these are mutually exclusive in
+            // practice, but the explicit ordering documents intent).
+            let is_heading_line = heading_lines_set.contains(&line_number);
+            let in_code_block = ctx.line_info(line_number).is_some_and(|info| info.in_code_block);
+            let line_limit = if is_heading_line {
+                effective_config.effective_heading_line_length().get()
+            } else if in_code_block {
+                effective_config.effective_code_block_line_length().get()
+            } else {
+                effective_config.line_length.get()
+            };
 
-            // In non-strict mode, forgive the trailing non-whitespace run.
+            // A context-specific limit of 0 means "unlimited for this context".
+            if line_limit == 0 {
+                continue;
+            }
+
+            // Stern mode: like default, but the trailing-token forgiveness is
+            // disabled — a line with whitespace that exceeds the limit is a
+            // violation even if the excess is the final token. The "unwrappable"
+            // line exemption (single token, optionally prefixed by # or >) is
+            // still honored. Strict overrides stern entirely.
+            if effective_config.stern && !effective_config.strict && is_unwrappable_line(line) {
+                continue;
+            }
+
+            // Trailing-token forgiveness: only in default mode (not strict, not stern).
             // If the line only exceeds the limit because of a long token at the end
             // (URL, link chain, identifier), it passes. This matches markdownlint's
             // behavior: line.replace(/\S*$/u, "#")
-            let check_length = if effective_config.strict {
+            let check_length = if effective_config.strict || effective_config.stern {
                 effective_length
             } else {
                 match line.rfind(char::is_whitespace) {
@@ -550,18 +593,11 @@ impl Rule for MD013LineLength {
     }
 
     fn default_config_section(&self) -> Option<(String, toml::Value)> {
-        let default_config = MD013Config::default();
-        let json_value = serde_json::to_value(&default_config).ok()?;
-        let toml_value = crate::rule_config_serde::json_to_toml_value(&json_value)?;
-
-        if let toml::Value::Table(table) = toml_value {
-            if !table.is_empty() {
-                Some((MD013Config::RULE_NAME.to_string(), toml::Value::Table(table)))
-            } else {
-                None
-            }
-        } else {
+        let table = crate::rule_config_serde::config_schema_table(&MD013Config::default())?;
+        if table.is_empty() {
             None
+        } else {
+            Some((MD013Config::RULE_NAME.to_string(), toml::Value::Table(table)))
         }
     }
 
