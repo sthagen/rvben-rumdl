@@ -926,6 +926,21 @@ impl<'a> LintContext<'a> {
         self.lines[line_num - 1].in_html_block
     }
 
+    /// Check if a 1-indexed line number is inside a GFM table block.
+    ///
+    /// Returns `true` for the header line, delimiter line, and all body rows.
+    /// `TableBlock` spans are stored 0-indexed; this helper accepts the
+    /// 1-indexed line numbers used elsewhere in the rule API.
+    pub fn is_in_table_block(&self, line_num: usize) -> bool {
+        if line_num == 0 {
+            return false;
+        }
+        let line_idx = line_num - 1;
+        self.table_blocks
+            .iter()
+            .any(|block| line_idx >= block.start_line && line_idx <= block.end_line)
+    }
+
     /// Check if a line and column is within a code span
     pub fn is_in_code_span(&self, line_num: usize, col: usize) -> bool {
         if line_num == 0 || line_num > self.lines.len() {

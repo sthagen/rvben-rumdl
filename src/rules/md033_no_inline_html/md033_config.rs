@@ -117,6 +117,25 @@ pub struct MD033Config {
     /// - "backslash": Backslash + newline (Pandoc/extended markdown)
     #[serde(default, rename = "br-style", alias = "br_style")]
     pub br_style: BrStyle,
+
+    /// HTML elements explicitly permitted inside GFM table cells.
+    ///
+    /// Mirrors markdownlint's `table_allowed_elements`. The semantics
+    /// distinguish three states:
+    /// - `None` (unset): in-table tags fall back to the `allowed` list.
+    /// - `Some(vec![])`: no tags are permitted inside table cells, even
+    ///   ones present in `allowed`.
+    /// - `Some([...])`: only the listed tags are permitted inside table
+    ///   cells; `allowed` is ignored for in-table contexts.
+    ///
+    /// Tags outside GFM tables are never affected by this option.
+    #[serde(
+        default,
+        rename = "table-allowed-elements",
+        alias = "table_allowed_elements",
+        alias = "table_allowed"
+    )]
+    pub table_allowed_elements: Option<Vec<String>>,
 }
 
 impl Default for MD033Config {
@@ -129,6 +148,7 @@ impl Default for MD033Config {
             drop_attributes: default_drop_attributes(),
             strip_wrapper_elements: default_strip_wrapper_elements(),
             br_style: BrStyle::default(),
+            table_allowed_elements: None,
         }
     }
 }
@@ -148,6 +168,18 @@ impl MD033Config {
     /// Convert allowed elements to HashSet for efficient lookup
     pub fn allowed_set(&self) -> HashSet<String> {
         self.allowed.iter().map(|s| s.to_lowercase()).collect()
+    }
+
+    /// Resolve the effective allowlist for tags inside GFM table cells.
+    ///
+    /// When `table_allowed_elements` is unset, falls back to `allowed_set`
+    /// (matching markdownlint's `table_allowed_elements || allowed_elements`
+    /// precedence). When set (even to an empty vec), takes precedence inside tables.
+    pub fn table_allowed_set(&self) -> HashSet<String> {
+        match &self.table_allowed_elements {
+            Some(list) => list.iter().map(|s| s.to_lowercase()).collect(),
+            None => self.allowed_set(),
+        }
     }
 
     /// Convert disallowed elements to HashSet for efficient lookup.

@@ -14,6 +14,7 @@ use md033_config::{MD033Config, MD033FixMode};
 pub struct MD033NoInlineHtml {
     config: MD033Config,
     allowed: HashSet<String>,
+    table_allowed: HashSet<String>,
     disallowed: HashSet<String>,
     drop_attributes: HashSet<String>,
     strip_wrapper_elements: HashSet<String>,
@@ -21,18 +22,7 @@ pub struct MD033NoInlineHtml {
 
 impl Default for MD033NoInlineHtml {
     fn default() -> Self {
-        let config = MD033Config::default();
-        let allowed = config.allowed_set();
-        let disallowed = config.disallowed_set();
-        let drop_attributes = config.drop_attributes_set();
-        let strip_wrapper_elements = config.strip_wrapper_elements_set();
-        Self {
-            config,
-            allowed,
-            disallowed,
-            drop_attributes,
-            strip_wrapper_elements,
-        }
+        Self::from_config_struct(MD033Config::default())
     }
 }
 
@@ -42,108 +32,85 @@ impl MD033NoInlineHtml {
     }
 
     pub fn with_allowed(allowed_vec: Vec<String>) -> Self {
-        let config = MD033Config {
+        Self::from_config_struct(MD033Config {
             allowed: allowed_vec,
-            disallowed: Vec::new(),
-            fix: false,
             ..MD033Config::default()
-        };
-        let allowed = config.allowed_set();
-        let disallowed = config.disallowed_set();
-        let drop_attributes = config.drop_attributes_set();
-        let strip_wrapper_elements = config.strip_wrapper_elements_set();
-        Self {
-            config,
-            allowed,
-            disallowed,
-            drop_attributes,
-            strip_wrapper_elements,
-        }
+        })
     }
 
     pub fn with_disallowed(disallowed_vec: Vec<String>) -> Self {
-        let config = MD033Config {
-            allowed: Vec::new(),
+        Self::from_config_struct(MD033Config {
             disallowed: disallowed_vec,
-            fix: false,
             ..MD033Config::default()
-        };
-        let allowed = config.allowed_set();
-        let disallowed = config.disallowed_set();
-        let drop_attributes = config.drop_attributes_set();
-        let strip_wrapper_elements = config.strip_wrapper_elements_set();
-        Self {
-            config,
-            allowed,
-            disallowed,
-            drop_attributes,
-            strip_wrapper_elements,
-        }
+        })
     }
 
     /// Create a new rule with auto-fix enabled
     pub fn with_fix(fix: bool) -> Self {
-        let config = MD033Config {
-            allowed: Vec::new(),
-            disallowed: Vec::new(),
+        Self::from_config_struct(MD033Config {
             fix,
             ..MD033Config::default()
-        };
-        let allowed = config.allowed_set();
-        let disallowed = config.disallowed_set();
-        let drop_attributes = config.drop_attributes_set();
-        let strip_wrapper_elements = config.strip_wrapper_elements_set();
-        Self {
-            config,
-            allowed,
-            disallowed,
-            drop_attributes,
-            strip_wrapper_elements,
-        }
+        })
     }
 
+    /// Single source of truth for building an `MD033NoInlineHtml` from config.
+    /// Pre-computes all lowercase HashSets so per-line lookups are O(1).
     pub fn from_config_struct(config: MD033Config) -> Self {
         let allowed = config.allowed_set();
+        let table_allowed = config.table_allowed_set();
         let disallowed = config.disallowed_set();
         let drop_attributes = config.drop_attributes_set();
         let strip_wrapper_elements = config.strip_wrapper_elements_set();
         Self {
             config,
             allowed,
+            table_allowed,
             disallowed,
             drop_attributes,
             strip_wrapper_elements,
         }
     }
 
-    // Efficient check for allowed tags using HashSet (case-insensitive)
+    /// Extract the lowercase tag name from a raw tag string like `<br/>` or
+    /// `</div >`. Strips angle brackets, leading slash, and stops at the first
+    /// whitespace, `>`, or `/`. Returns an empty string if no name is present.
     #[inline]
-    fn is_tag_allowed(&self, tag: &str) -> bool {
-        if self.allowed.is_empty() {
-            return false;
-        }
-        // Remove angle brackets and slashes, then split by whitespace or '>'
-        let tag = tag.trim_start_matches('<').trim_start_matches('/');
-        let tag_name = tag
+    fn extract_tag_name(tag: &str) -> String {
+        let trimmed = tag.trim_start_matches('<').trim_start_matches('/');
+        trimmed
             .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
             .next()
-            .unwrap_or("");
-        self.allowed.contains(&tag_name.to_lowercase())
+            .unwrap_or("")
+            .to_lowercase()
     }
 
-    /// Check if a tag is in the disallowed set (for disallowed-only mode)
+    /// Membership check against a precomputed lowercase set, returning false
+    /// fast when the set is empty.
     #[inline]
-    fn is_tag_disallowed(&self, tag: &str) -> bool {
-        if self.disallowed.is_empty() {
+    fn tag_in_set(set: &HashSet<String>, tag: &str) -> bool {
+        if set.is_empty() {
             return false;
         }
-        // Remove angle brackets and slashes, then split by whitespace or '>'
-        let tag = tag.trim_start_matches('<').trim_start_matches('/');
-        let tag_name = tag
-            .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
-            .next()
-            .unwrap_or("");
-        self.disallowed.contains(&tag_name.to_lowercase())
+        set.contains(&Self::extract_tag_name(tag))
+    }
+
+    /// Check whether the tag is in the general `allowed_elements` list.
+    #[inline]
+    fn is_tag_allowed(&self, tag: &str) -> bool {
+        Self::tag_in_set(&self.allowed, tag)
+    }
+
+    /// Check whether the tag is permitted inside a GFM table cell.
+    /// Uses `table_allowed_elements` if configured, falling back to `allowed`.
+    #[inline]
+    fn is_tag_allowed_in_table(&self, tag: &str) -> bool {
+        Self::tag_in_set(&self.table_allowed, tag)
+    }
+
+    /// Check if a tag is in the disallowed set (for disallowed-only mode).
+    #[inline]
+    fn is_tag_disallowed(&self, tag: &str) -> bool {
+        Self::tag_in_set(&self.disallowed, tag)
     }
 
     /// Check if operating in disallowed-only mode
@@ -1107,17 +1074,18 @@ impl Rule for MD033NoInlineHtml {
 
             // Determine whether to report this tag based on mode:
             // - Disallowed mode: only report tags in the disallowed list
-            // - Default mode: report all tags except those in the allowed list
+            // - Default mode: report all tags except those in the allowed list,
+            //   with `table_allowed` taking precedence inside GFM table cells.
             if self.is_disallowed_mode() {
-                // In disallowed mode, skip tags NOT in the disallowed list
                 if !self.is_tag_disallowed(tag) {
                     continue;
                 }
-            } else {
-                // In default mode, skip allowed tags
-                if self.is_tag_allowed(tag) {
+            } else if ctx.is_in_table_block(line_num) {
+                if self.is_tag_allowed_in_table(tag) {
                     continue;
                 }
+            } else if self.is_tag_allowed(tag) {
+                continue;
             }
 
             // Skip tags with markdown attribute in MkDocs mode
@@ -1214,11 +1182,8 @@ impl Rule for MD033NoInlineHtml {
     }
 
     fn default_config_section(&self) -> Option<(String, toml::Value)> {
-        let json_value = serde_json::to_value(&self.config).ok()?;
-        Some((
-            self.name().to_string(),
-            crate::rule_config_serde::json_to_toml_value(&json_value)?,
-        ))
+        let table = crate::rule_config_serde::config_schema_table(&self.config)?;
+        Some((self.name().to_string(), toml::Value::Table(table)))
     }
 
     fn config_aliases(&self) -> Option<std::collections::HashMap<String, String>> {
@@ -2902,5 +2867,147 @@ tR += `# ${file}\n\nCreated: ${date}\nIn: ${folder}`;
             "[![Contributors](https://contrib.rocks/image)](https://github.com/org/repo)",
         );
         assert!(result.converged);
+    }
+
+    // =========================================================================
+    // table_allowed_elements config option tests
+    //
+    // Mirrors markdownlint's `table_allowed_elements`: when unset, the in-table
+    // allowlist falls back to `allowed_elements`; when explicitly set (even to
+    // []), it overrides for tags inside GFM table cells. Out-of-table tags are
+    // never affected by this option.
+    // =========================================================================
+
+    #[test]
+    fn test_md033_table_allowed_unset_falls_back_to_allowed() {
+        let config = MD033Config {
+            allowed: vec!["br".to_string()],
+            table_allowed_elements: None,
+            ..MD033Config::default()
+        };
+        let rule = MD033NoInlineHtml::from_config_struct(config);
+        let content = "| col |\n|-----|\n| a<br>b |\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "<br> in table cell should be allowed via fallback to `allowed`, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_md033_table_allowed_explicit_empty_rejects_in_tables() {
+        let config = MD033Config {
+            allowed: vec!["br".to_string()],
+            table_allowed_elements: Some(Vec::new()),
+            ..MD033Config::default()
+        };
+        let rule = MD033NoInlineHtml::from_config_struct(config);
+        let content = "| col |\n|-----|\n| a<br>b |\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.len(),
+            1,
+            "Explicit empty table_allowed should reject <br> in tables even if it's in `allowed`, got {result:?}"
+        );
+        assert_eq!(result[0].line, 3);
+    }
+
+    #[test]
+    fn test_md033_table_allowed_explicit_list_overrides_in_tables() {
+        let config = MD033Config {
+            allowed: vec!["br".to_string()],
+            table_allowed_elements: Some(vec!["img".to_string()]),
+            ..MD033Config::default()
+        };
+        let rule = MD033NoInlineHtml::from_config_struct(config);
+        // <br> is in allowed but NOT in table_allowed, so it should be flagged in table.
+        // <img> is in table_allowed only, so it should be permitted in table.
+        let content = "| col |\n|-----|\n| <br><img src=\"x\"/> |\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.len(),
+            1,
+            "table_allowed should override `allowed` inside tables, got {result:?}"
+        );
+        assert!(
+            result[0].message.contains("br"),
+            "expected the flagged tag to be <br>, got {:?}",
+            result[0].message
+        );
+    }
+
+    #[test]
+    fn test_md033_table_allowed_does_not_affect_out_of_table_tags() {
+        let config = MD033Config {
+            allowed: vec!["br".to_string()],
+            table_allowed_elements: Some(Vec::new()),
+            ..MD033Config::default()
+        };
+        let rule = MD033NoInlineHtml::from_config_struct(config);
+        // <br> outside a table — should still be allowed via `allowed`.
+        let content = "Paragraph with <br> tag.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "<br> outside tables must still be allowed by `allowed`, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_md033_table_allowed_kebab_case_parses() {
+        let toml_str = r#"
+            allowed-elements = ["br"]
+            table-allowed-elements = ["img"]
+        "#;
+        let config: MD033Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.allowed, vec!["br"]);
+        assert_eq!(
+            config.table_allowed_elements.as_deref(),
+            Some(["img".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn test_md033_table_allowed_snake_case_alias_parses() {
+        let toml_str = r#"
+            allowed_elements = ["br"]
+            table_allowed_elements = ["img"]
+        "#;
+        let config: MD033Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.allowed, vec!["br"]);
+        assert_eq!(
+            config.table_allowed_elements.as_deref(),
+            Some(["img".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn test_md033_table_allowed_default_is_none() {
+        let cfg = MD033Config::default();
+        assert!(
+            cfg.table_allowed_elements.is_none(),
+            "Default for table_allowed_elements should be None (so it falls back to `allowed`)"
+        );
+    }
+
+    #[test]
+    fn test_md033_table_allowed_case_insensitive() {
+        let config = MD033Config {
+            allowed: Vec::new(),
+            table_allowed_elements: Some(vec!["BR".to_string()]),
+            ..MD033Config::default()
+        };
+        let rule = MD033NoInlineHtml::from_config_struct(config);
+        let content = "| col |\n|-----|\n| a<br>b |\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "table_allowed should be case-insensitive, got {result:?}"
+        );
     }
 }
