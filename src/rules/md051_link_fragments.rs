@@ -1,11 +1,54 @@
 use crate::rule::{CrossFileScope, FixCapability, LintError, LintResult, LintWarning, Rule, RuleCategory, Severity};
+use crate::rule_config_serde::RuleConfig;
 use crate::utils::anchor_styles::AnchorStyle;
 use crate::workspace_index::{CrossFileLinkIndex, FileIndex, HeadingIndex};
 use pulldown_cmark::LinkType;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
+
+/// Configuration for MD051 (Link fragments)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub struct MD051Config {
+    /// Anchor generation style to match the target platform
+    #[serde(default, alias = "anchor_style")]
+    pub anchor_style: AnchorStyle,
+
+    /// Match link fragments against headings case-insensitively.
+    ///
+    /// rumdl defaults to `true` (permissive matching), which deviates from
+    /// markdownlint's default of `false`. Set this to `false` for strict
+    /// markdownlint parity.
+    #[serde(default = "default_ignore_case", alias = "ignore_case")]
+    pub ignore_case: bool,
+
+    /// Optional regex applied to the fragment text (without the leading `#`).
+    /// Fragments that match are skipped — useful for runtime-generated anchors
+    /// (e.g., footnote IDs) that aren't visible to the linter.
+    #[serde(default, alias = "ignored_pattern")]
+    pub ignored_pattern: Option<String>,
+}
+
+fn default_ignore_case() -> bool {
+    true
+}
+
+impl Default for MD051Config {
+    fn default() -> Self {
+        Self {
+            anchor_style: AnchorStyle::default(),
+            ignore_case: true,
+            ignored_pattern: None,
+        }
+    }
+}
+
+impl RuleConfig for MD051Config {
+    const RULE_NAME: &'static str = "MD051";
+}
 // HTML tags with id or name attributes (supports any HTML element, not just <a>)
 // This pattern only captures the first id/name attribute in a tag
 static HTML_ANCHOR_PATTERN: LazyLock<Regex> =
@@ -45,8 +88,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 /// Supports both same-document anchors and cross-file fragment links when linting a workspace.
 #[derive(Clone)]
 pub struct MD051LinkFragments {
-    /// Anchor style to use for validation
-    anchor_style: AnchorStyle,
+    config: MD051Config,
 }
 
 impl Default for MD051LinkFragments {
@@ -58,13 +100,23 @@ impl Default for MD051LinkFragments {
 impl MD051LinkFragments {
     pub fn new() -> Self {
         Self {
-            anchor_style: AnchorStyle::GitHub,
+            config: MD051Config::default(),
         }
     }
 
-    /// Create with specific anchor style
+    /// Create with specific anchor style (other options use defaults)
     pub fn with_anchor_style(style: AnchorStyle) -> Self {
-        Self { anchor_style: style }
+        Self {
+            config: MD051Config {
+                anchor_style: style,
+                ..MD051Config::default()
+            },
+        }
+    }
+
+    /// Create from a fully-populated config struct
+    pub fn from_config_struct(config: MD051Config) -> Self {
+        Self { config }
     }
 
     /// Parse ATX heading content from blockquote inner text.
@@ -114,6 +166,7 @@ impl MD051LinkFragments {
         fragment: String,
         fragment_counts: &mut HashMap<String, usize>,
         markdown_headings: &mut HashSet<String>,
+        markdown_headings_exact: &mut HashSet<String>,
         use_underscore_dedup: bool,
     ) {
         if fragment.is_empty() {
@@ -123,7 +176,9 @@ impl MD051LinkFragments {
             // Python-Markdown: empty slug → _1, _2, _3, ...
             let count = fragment_counts.entry(fragment).or_insert(0);
             *count += 1;
-            markdown_headings.insert(format!("_{count}"));
+            let formed = format!("_{count}");
+            markdown_headings.insert(formed.clone());
+            markdown_headings_exact.insert(formed);
             return;
         }
         if let Some(count) = fragment_counts.get_mut(&fragment) {
@@ -131,16 +186,23 @@ impl MD051LinkFragments {
             *count += 1;
             if use_underscore_dedup {
                 // Python-Markdown primary: heading_1, heading_2
-                markdown_headings.insert(format!("{fragment}_{suffix}"));
+                let underscore_form = format!("{fragment}_{suffix}");
+                markdown_headings.insert(underscore_form.clone());
+                markdown_headings_exact.insert(underscore_form);
                 // Also accept GitHub-style for compatibility
-                markdown_headings.insert(format!("{fragment}-{suffix}"));
+                let dash_form = format!("{fragment}-{suffix}");
+                markdown_headings.insert(dash_form.clone());
+                markdown_headings_exact.insert(dash_form);
             } else {
                 // GitHub-style: heading-1, heading-2
-                markdown_headings.insert(format!("{fragment}-{suffix}"));
+                let form = format!("{fragment}-{suffix}");
+                markdown_headings.insert(form.clone());
+                markdown_headings_exact.insert(form);
             }
         } else {
             fragment_counts.insert(fragment.clone(), 1);
-            markdown_headings.insert(fragment);
+            markdown_headings.insert(fragment.clone());
+            markdown_headings_exact.insert(fragment);
         }
     }
 
@@ -207,17 +269,25 @@ impl MD051LinkFragments {
         }
     }
 
-    /// Extract all valid heading anchors from the document
-    /// Returns (markdown_anchors, html_anchors) where markdown_anchors are lowercased
-    /// for case-insensitive matching, and html_anchors are case-sensitive
+    /// Extract all valid heading anchors from the document.
+    ///
+    /// Returns `(markdown_headings_lower, markdown_headings_exact, html_anchors)`.
+    /// - `markdown_headings_lower`: lowercased markdown/attribute anchors used when
+    ///   `ignore_case = true` (the default).
+    /// - `markdown_headings_exact`: case-preserving counterpart used when
+    ///   `ignore_case = false` for strict markdownlint parity. Slugs from
+    ///   `generate_fragment` are already lowercase, so this set differs from
+    ///   `markdown_headings_lower` only for case-preserving custom IDs.
+    /// - `html_anchors`: HTML `id`/`name` attribute values, always matched case-sensitively.
     fn extract_headings_from_context(
         &self,
         ctx: &crate::lint_context::LintContext,
-    ) -> (HashSet<String>, HashSet<String>) {
+    ) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
         let mut markdown_headings = HashSet::with_capacity(32);
+        let mut markdown_headings_exact = HashSet::with_capacity(32);
         let mut html_anchors = HashSet::with_capacity(16);
         let mut fragment_counts = std::collections::HashMap::new();
-        let use_underscore_dedup = self.anchor_style == AnchorStyle::PythonMarkdown;
+        let use_underscore_dedup = self.config.anchor_style == AnchorStyle::PythonMarkdown;
 
         for line_info in &ctx.lines {
             if line_info.in_front_matter {
@@ -271,8 +341,9 @@ impl MD051LinkFragments {
             if line_info.heading.is_none() && content.contains('{') && content.contains('#') {
                 for caps in ATTR_ANCHOR_PATTERN.captures_iter(content) {
                     if let Some(id_match) = caps.get(1) {
-                        // Add to markdown_headings (lowercased for case-insensitive matching)
-                        markdown_headings.insert(id_match.as_str().to_lowercase());
+                        let id = id_match.as_str();
+                        markdown_headings.insert(id.to_lowercase());
+                        markdown_headings_exact.insert(id.to_string());
                     }
                 }
             }
@@ -286,12 +357,14 @@ impl MD051LinkFragments {
             {
                 if let Some(id) = custom_id {
                     markdown_headings.insert(id.to_lowercase());
+                    markdown_headings_exact.insert(id);
                 }
-                let fragment = self.anchor_style.generate_fragment(&clean_text);
+                let fragment = self.config.anchor_style.generate_fragment(&clean_text);
                 Self::insert_deduplicated_fragment(
                     fragment,
                     &mut fragment_counts,
                     &mut markdown_headings,
+                    &mut markdown_headings_exact,
                     use_underscore_dedup,
                 );
             }
@@ -301,23 +374,25 @@ impl MD051LinkFragments {
                 // Custom ID from {#custom-id} syntax
                 if let Some(custom_id) = &heading.custom_id {
                     markdown_headings.insert(custom_id.to_lowercase());
+                    markdown_headings_exact.insert(custom_id.clone());
                 }
 
                 // Generate fragment directly from heading text
                 // Note: HTML stripping was removed because it interfered with arrow patterns
                 // like <-> and placeholders like <FILE>. The anchor styles handle these correctly.
-                let fragment = self.anchor_style.generate_fragment(&heading.text);
+                let fragment = self.config.anchor_style.generate_fragment(&heading.text);
 
                 Self::insert_deduplicated_fragment(
                     fragment,
                     &mut fragment_counts,
                     &mut markdown_headings,
+                    &mut markdown_headings_exact,
                     use_underscore_dedup,
                 );
             }
         }
 
-        (markdown_headings, html_anchors)
+        (markdown_headings, markdown_headings_exact, html_anchors)
     }
 
     /// Fast check if URL is external (doesn't need to be validated)
@@ -508,7 +583,11 @@ impl Rule for MD051LinkFragments {
             return Ok(warnings);
         }
 
-        let (markdown_headings, html_anchors) = self.extract_headings_from_context(ctx);
+        let (markdown_headings, markdown_headings_exact, html_anchors) = self.extract_headings_from_context(ctx);
+
+        // Compile the ignored_pattern once. An invalid regex is treated as no filter
+        // (defensive: we never silently swallow violations because of a bad pattern).
+        let ignored_pattern = self.config.ignored_pattern.as_deref().and_then(|s| Regex::new(s).ok());
 
         for link in &ctx.links {
             if link.is_reference {
@@ -594,13 +673,20 @@ impl Rule for MD051LinkFragments {
                 continue;
             }
 
-            // Validate fragment against document headings
-            // HTML anchors are case-sensitive, markdown anchors are case-insensitive
+            // Skip fragments matching the user-configured ignored_pattern
+            if ignored_pattern.as_ref().is_some_and(|re| re.is_match(fragment)) {
+                continue;
+            }
+
+            // Validate fragment against document headings.
+            // HTML anchors are always matched case-sensitively. Markdown anchors
+            // honor the `ignore_case` option (default true).
             let found = if html_anchors.contains(fragment) {
                 true
+            } else if self.config.ignore_case {
+                markdown_headings.contains(&fragment.to_lowercase())
             } else {
-                let fragment_lower = fragment.to_lowercase();
-                markdown_headings.contains(&fragment_lower)
+                markdown_headings_exact.contains(fragment)
             };
 
             if !found {
@@ -634,28 +720,23 @@ impl Rule for MD051LinkFragments {
     where
         Self: Sized,
     {
-        // Config keys are normalized to kebab-case by the config system
-        let explicit_style = config
+        let mut rule_config = crate::rule_config_serde::load_rule_config::<MD051Config>(config);
+
+        // When no explicit anchor style is configured (the user didn't override the default),
+        // and a flavor is active, fall back to the flavor's native anchor generation.
+        let explicit_style_present = config
             .rules
             .get("MD051")
-            .and_then(|rc| rc.values.get("anchor-style"))
-            .and_then(|v| v.as_str())
-            .map(|style_str| match style_str.to_lowercase().as_str() {
-                "kramdown" => AnchorStyle::Kramdown,
-                "kramdown-gfm" | "jekyll" => AnchorStyle::KramdownGfm,
-                "python-markdown" | "python_markdown" | "mkdocs" => AnchorStyle::PythonMarkdown,
+            .is_some_and(|rc| rc.values.contains_key("anchor-style") || rc.values.contains_key("anchor_style"));
+        if !explicit_style_present {
+            rule_config.anchor_style = match config.global.flavor {
+                crate::config::MarkdownFlavor::MkDocs => AnchorStyle::PythonMarkdown,
+                crate::config::MarkdownFlavor::Kramdown => AnchorStyle::KramdownGfm,
                 _ => AnchorStyle::GitHub,
-            });
+            };
+        }
 
-        // When a flavor is active and no explicit anchor style is configured,
-        // default to the flavor's native anchor generation
-        let anchor_style = explicit_style.unwrap_or(match config.global.flavor {
-            crate::config::MarkdownFlavor::MkDocs => AnchorStyle::PythonMarkdown,
-            crate::config::MarkdownFlavor::Kramdown => AnchorStyle::KramdownGfm,
-            _ => AnchorStyle::GitHub,
-        });
-
-        Box::new(MD051LinkFragments::with_anchor_style(anchor_style))
+        Box::new(MD051LinkFragments::from_config_struct(rule_config))
     }
 
     fn category(&self) -> RuleCategory {
@@ -668,7 +749,7 @@ impl Rule for MD051LinkFragments {
 
     fn contribute_to_index(&self, ctx: &crate::lint_context::LintContext, file_index: &mut FileIndex) {
         let mut fragment_counts = HashMap::new();
-        let use_underscore_dedup = self.anchor_style == AnchorStyle::PythonMarkdown;
+        let use_underscore_dedup = self.config.anchor_style == AnchorStyle::PythonMarkdown;
 
         // Extract headings, HTML anchors, and attribute anchors (for other files to reference)
         for (line_idx, line_info) in ctx.lines.iter().enumerate() {
@@ -723,7 +804,7 @@ impl Rule for MD051LinkFragments {
                 && let Some(bq) = &line_info.blockquote
                 && let Some((clean_text, custom_id)) = Self::parse_blockquote_heading(&bq.content)
             {
-                let fragment = self.anchor_style.generate_fragment(&clean_text);
+                let fragment = self.config.anchor_style.generate_fragment(&clean_text);
                 Self::add_heading_to_index(
                     &fragment,
                     &clean_text,
@@ -737,7 +818,7 @@ impl Rule for MD051LinkFragments {
 
             // Extract heading anchors
             if let Some(heading) = &line_info.heading {
-                let fragment = self.anchor_style.generate_fragment(&heading.text);
+                let fragment = self.config.anchor_style.generate_fragment(&heading.text);
 
                 Self::add_heading_to_index(
                     &fragment,
@@ -885,16 +966,12 @@ impl Rule for MD051LinkFragments {
     }
 
     fn default_config_section(&self) -> Option<(String, toml::Value)> {
-        let value: toml::Value = toml::from_str(
-            r#"
-# Anchor generation style to match your target platform
-# Options: "github" (default), "kramdown-gfm", "kramdown"
-# Note: "jekyll" is accepted as an alias for "kramdown-gfm" (backward compatibility)
-anchor-style = "github"
-"#,
-        )
-        .ok()?;
-        Some(("MD051".to_string(), value))
+        let table = crate::rule_config_serde::config_schema_table(&MD051Config::default())?;
+        if table.is_empty() {
+            None
+        } else {
+            Some((MD051Config::RULE_NAME.to_string(), toml::Value::Table(table)))
+        }
     }
 }
 

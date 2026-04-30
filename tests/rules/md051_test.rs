@@ -2904,3 +2904,180 @@ mod html_comment_in_heading_regression {
         );
     }
 }
+
+mod ignored_pattern_tests {
+    use rumdl_lib::lint_context::LintContext;
+    use rumdl_lib::rule::Rule;
+    use rumdl_lib::rules::MD051LinkFragments;
+    use rumdl_lib::rules::md051_link_fragments::MD051Config;
+
+    #[test]
+    fn test_ignored_pattern_skips_matching_fragment() {
+        // ignored_pattern matches on the fragment text (without the leading #).
+        // A fragment that matches the pattern should never produce a warning,
+        // even when the heading does not exist.
+        let config = MD051Config {
+            ignored_pattern: Some("^section-".to_string()),
+            ..MD051Config::default()
+        };
+        let rule = MD051LinkFragments::from_config_struct(config);
+        let content = "# Real heading\n\n[link](#section-missing)\n";
+        let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "fragment matching ignored_pattern must be skipped, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_ignored_pattern_does_not_skip_non_matching_fragment() {
+        let config = MD051Config {
+            ignored_pattern: Some("^section-".to_string()),
+            ..MD051Config::default()
+        };
+        let rule = MD051LinkFragments::from_config_struct(config);
+        let content = "# Real heading\n\n[link](#other-missing)\n";
+        let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1, "non-matching fragment must still warn, got {result:?}");
+    }
+
+    #[test]
+    fn test_ignored_pattern_default_unset_skips_nothing() {
+        let rule = MD051LinkFragments::from_config_struct(MD051Config::default());
+        let content = "# Real heading\n\n[link](#anything-missing)\n";
+        let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.len(),
+            1,
+            "default empty pattern must not skip anything, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_ignored_pattern_invalid_regex_is_treated_as_no_filter() {
+        // Defensive: an invalid regex should not crash; treat as if unset.
+        let config = MD051Config {
+            ignored_pattern: Some("[unterminated".to_string()),
+            ..MD051Config::default()
+        };
+        let rule = MD051LinkFragments::from_config_struct(config);
+        let content = "# Real heading\n\n[link](#missing)\n";
+        let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.len(),
+            1,
+            "invalid regex must not silently swallow violations, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_ignored_pattern_kebab_case_parses() {
+        let toml_str = "ignored-pattern = \"^x-\"\n";
+        let config: MD051Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ignored_pattern.as_deref(), Some("^x-"));
+    }
+
+    #[test]
+    fn test_ignored_pattern_snake_case_alias_parses() {
+        let toml_str = "ignored_pattern = \"^x-\"\n";
+        let config: MD051Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ignored_pattern.as_deref(), Some("^x-"));
+    }
+}
+
+mod ignore_case_tests {
+    use rumdl_lib::lint_context::LintContext;
+    use rumdl_lib::rule::Rule;
+    use rumdl_lib::rules::MD051LinkFragments;
+    use rumdl_lib::rules::md051_link_fragments::MD051Config;
+
+    #[test]
+    fn test_ignore_case_default_true_accepts_case_mismatch() {
+        // rumdl's default differs from markdownlint: ignore_case defaults to true,
+        // so case-mismatched fragments are accepted. This preserves the long-standing
+        // rumdl behavior; users seeking strict markdownlint parity must opt in
+        // with ignore_case = false.
+        let rule = MD051LinkFragments::from_config_struct(MD051Config::default());
+        let content = "# My Heading\n\n[link](#MY-HEADING)\n";
+        let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "default ignore_case=true must accept case-only mismatches, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_ignore_case_false_warns_on_case_mismatch() {
+        // Opt-in markdownlint-strict mode: case-only mismatches are reported.
+        let config = MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        };
+        let rule = MD051LinkFragments::from_config_struct(config);
+        let content = "# My Heading\n\n[link](#MY-HEADING)\n";
+        let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.len(),
+            1,
+            "ignore_case=false must flag case-only mismatch, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_ignore_case_false_accepts_exact_match() {
+        let config = MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        };
+        let rule = MD051LinkFragments::from_config_struct(config);
+        let content = "# My Heading\n\n[link](#my-heading)\n";
+        let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "ignore_case=false must accept exact-case match, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_ignore_case_false_warns_on_unknown_fragment() {
+        let config = MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        };
+        let rule = MD051LinkFragments::from_config_struct(config);
+        let content = "# My Heading\n\n[link](#totally-different)\n";
+        let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1, "unknown fragment must always warn, got {result:?}");
+    }
+
+    #[test]
+    fn test_ignore_case_kebab_case_parses() {
+        let toml_str = "ignore-case = false\n";
+        let config: MD051Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.ignore_case);
+    }
+
+    #[test]
+    fn test_ignore_case_snake_case_alias_parses() {
+        let toml_str = "ignore_case = false\n";
+        let config: MD051Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.ignore_case);
+    }
+
+    #[test]
+    fn test_ignore_case_default_is_true() {
+        let config = MD051Config::default();
+        assert!(
+            config.ignore_case,
+            "rumdl default ignore_case is true to preserve permissive behavior"
+        );
+    }
+}

@@ -41,7 +41,7 @@ mod md047_single_trailing_newline;
 mod md048_code_fence_style;
 mod md049_emphasis_style;
 mod md050_strong_style;
-mod md051_link_fragments;
+pub mod md051_link_fragments;
 mod md052_reference_links_images;
 mod md053_link_image_reference_definitions;
 mod md054_link_image_style;
