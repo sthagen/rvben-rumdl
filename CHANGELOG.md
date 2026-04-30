@@ -27,6 +27,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.85](https://github.com/rvben/rumdl/compare/v0.1.84...v0.1.85) - 2026-04-30
+
+### Added
+
+- **md051**: add ignore-case and ignored-pattern for markdownlint parity ([4535a2b](https://github.com/rvben/rumdl/commit/4535a2b48486940551e3fe1b2dede137ebde8a48))
+- **md013**: add heading-line-length, code-block-line-length, stern ([6c22f82](https://github.com/rvben/rumdl/commit/6c22f82fd08c21721f0fbb0d8c23cfe32c3e2df0))
+- **md033**: add table-allowed-elements option for markdownlint parity ([10bdc18](https://github.com/rvben/rumdl/commit/10bdc18e09eb92dac69aa550326efdfdbbb59521))
+- **md027**: add list-items option for opt-in markdownlint parity ([2589aad](https://github.com/rvben/rumdl/commit/2589aadd813bfb2afe925b0e59cb81ea6512b42b))
+- **md060**: add aligned-delimiter option for markdownlint parity ([ce6eaac](https://github.com/rvben/rumdl/commit/ce6eaaca77ea3a4ebd0cd2249e518378afe47874))
+
+### Fixed
+
+- **md051**: unify ignore-case and ignored-pattern across same-doc and cross-file paths ([3c295bc](https://github.com/rvben/rumdl/commit/3c295bc4e3780c6bf4a6556f2a5986732d77a6a8))
+- **config**: initialize canonical_project_root_cache in From impl ([306777d](https://github.com/rvben/rumdl/commit/306777d0c61b9e4090e39aceb37f5a64b35ed069))
+- **md013**: require GFM table evidence before classifying list-item line ([a04f742](https://github.com/rvben/rumdl/commit/a04f7421229485c91393e5b4b798a9c923249217))
+- **config**: log when normalize_match_path falls back to raw absolute path ([6a6ceed](https://github.com/rvben/rumdl/commit/6a6ceedd44ae338cc58803b805f2740fba35c967))
+- **md013**: preserve tables nested inside list items during reflow ([fc3f89d](https://github.com/rvben/rumdl/commit/fc3f89de7fc7b45da5d6d685d43dcbdeefb3465c))
+- **config**: fall back to cwd when normalizing per-file glob paths ([360bde1](https://github.com/rvben/rumdl/commit/360bde1940fd3961e5ca88d4c8a021aa171c9a1a))
+- **md054**: include trailing `[]` in collapsed link span ([caa3acc](https://github.com/rvben/rumdl/commit/caa3acc5e8c9248a5e12a84e8282a90d31631421))
+
+### Performance
+
+- **config**: cache canonical project_root and harden silent-fallback diagnostic ([d4ea4ea](https://github.com/rvben/rumdl/commit/d4ea4ea081b215200fc8a9cade9f893d1616d8b8))
+
 ## [0.1.84](https://github.com/rvben/rumdl/compare/v0.1.83...v0.1.84) - 2026-04-28
 
 ### Added
