@@ -89,6 +89,21 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[derive(Clone)]
 pub struct MD051LinkFragments {
     config: MD051Config,
+    /// Pre-compiled `ignored_pattern` regex. `None` if the user did not set the
+    /// option, or if the pattern failed to compile (a `log::warn!` is emitted
+    /// once at construction time so the user can fix the config).
+    ignored_pattern_regex: Option<Regex>,
+}
+
+/// Anchor sets extracted from a single document, with parallel lowercase and
+/// case-preserving storage. The `*_exact` sets are empty unless
+/// `ignore_case = false` so the default permissive path costs no extra
+/// allocations.
+struct AnchorSets {
+    markdown_headings: HashSet<String>,
+    markdown_headings_exact: HashSet<String>,
+    html_anchors: HashSet<String>,
+    html_anchors_exact: HashSet<String>,
 }
 
 impl Default for MD051LinkFragments {
@@ -99,24 +114,39 @@ impl Default for MD051LinkFragments {
 
 impl MD051LinkFragments {
     pub fn new() -> Self {
-        Self {
-            config: MD051Config::default(),
-        }
+        Self::from_config_struct(MD051Config::default())
     }
 
     /// Create with specific anchor style (other options use defaults)
     pub fn with_anchor_style(style: AnchorStyle) -> Self {
-        Self {
-            config: MD051Config {
-                anchor_style: style,
-                ..MD051Config::default()
-            },
-        }
+        Self::from_config_struct(MD051Config {
+            anchor_style: style,
+            ..MD051Config::default()
+        })
     }
 
-    /// Create from a fully-populated config struct
+    /// Create from a fully-populated config struct.
+    ///
+    /// Compiles `ignored_pattern` once. An invalid regex is logged via
+    /// `log::warn!` and the rule falls back to "no filter" so linting still
+    /// works rather than silently swallowing every fragment.
     pub fn from_config_struct(config: MD051Config) -> Self {
-        Self { config }
+        let ignored_pattern_regex = config
+            .ignored_pattern
+            .as_deref()
+            .and_then(|pattern| match Regex::new(pattern) {
+                Ok(re) => Some(re),
+                Err(err) => {
+                    log::warn!(
+                        "Invalid ignored_pattern regex for MD051 ('{pattern}'): {err}. Falling back to no filter."
+                    );
+                    None
+                }
+            });
+        Self {
+            config,
+            ignored_pattern_regex,
+        }
     }
 
     /// Parse ATX heading content from blockquote inner text.
@@ -166,9 +196,20 @@ impl MD051LinkFragments {
         fragment: String,
         fragment_counts: &mut HashMap<String, usize>,
         markdown_headings: &mut HashSet<String>,
-        markdown_headings_exact: &mut HashSet<String>,
+        mut markdown_headings_exact: Option<&mut HashSet<String>>,
         use_underscore_dedup: bool,
     ) {
+        // Slugs from generate_fragment are already lowercase, so the exact set
+        // ends up identical to the lowercased set for slugs. The exact set is
+        // only meaningfully different for case-preserving custom IDs (handled
+        // by the caller). Skipping the parallel inserts when the caller passes
+        // None avoids unnecessary allocations on the default ignore_case=true path.
+        let mut also_insert_exact = |form: &str| {
+            if let Some(set) = markdown_headings_exact.as_deref_mut() {
+                set.insert(form.to_string());
+            }
+        };
+
         if fragment.is_empty() {
             if !use_underscore_dedup {
                 return;
@@ -177,8 +218,8 @@ impl MD051LinkFragments {
             let count = fragment_counts.entry(fragment).or_insert(0);
             *count += 1;
             let formed = format!("_{count}");
-            markdown_headings.insert(formed.clone());
-            markdown_headings_exact.insert(formed);
+            also_insert_exact(&formed);
+            markdown_headings.insert(formed);
             return;
         }
         if let Some(count) = fragment_counts.get_mut(&fragment) {
@@ -187,22 +228,22 @@ impl MD051LinkFragments {
             if use_underscore_dedup {
                 // Python-Markdown primary: heading_1, heading_2
                 let underscore_form = format!("{fragment}_{suffix}");
-                markdown_headings.insert(underscore_form.clone());
-                markdown_headings_exact.insert(underscore_form);
+                also_insert_exact(&underscore_form);
+                markdown_headings.insert(underscore_form);
                 // Also accept GitHub-style for compatibility
                 let dash_form = format!("{fragment}-{suffix}");
-                markdown_headings.insert(dash_form.clone());
-                markdown_headings_exact.insert(dash_form);
+                also_insert_exact(&dash_form);
+                markdown_headings.insert(dash_form);
             } else {
                 // GitHub-style: heading-1, heading-2
                 let form = format!("{fragment}-{suffix}");
-                markdown_headings.insert(form.clone());
-                markdown_headings_exact.insert(form);
+                also_insert_exact(&form);
+                markdown_headings.insert(form);
             }
         } else {
             fragment_counts.insert(fragment.clone(), 1);
-            markdown_headings.insert(fragment.clone());
-            markdown_headings_exact.insert(fragment);
+            also_insert_exact(&fragment);
+            markdown_headings.insert(fragment);
         }
     }
 
@@ -271,21 +312,24 @@ impl MD051LinkFragments {
 
     /// Extract all valid heading anchors from the document.
     ///
-    /// Returns `(markdown_headings_lower, markdown_headings_exact, html_anchors)`.
-    /// - `markdown_headings_lower`: lowercased markdown/attribute anchors used when
-    ///   `ignore_case = true` (the default).
-    /// - `markdown_headings_exact`: case-preserving counterpart used when
-    ///   `ignore_case = false` for strict markdownlint parity. Slugs from
-    ///   `generate_fragment` are already lowercase, so this set differs from
-    ///   `markdown_headings_lower` only for case-preserving custom IDs.
-    /// - `html_anchors`: HTML `id`/`name` attribute values, always matched case-sensitively.
-    fn extract_headings_from_context(
-        &self,
-        ctx: &crate::lint_context::LintContext,
-    ) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
+    /// Returns parallel lowercase + case-preserving sets so the same-document
+    /// check can honor `ignore_case` consistently with cross-file lookups.
+    /// The `*_exact` sets are only populated when `ignore_case = false` to
+    /// avoid unnecessary allocations on the default permissive path.
+    fn extract_headings_from_context(&self, ctx: &crate::lint_context::LintContext) -> AnchorSets {
+        let track_exact = !self.config.ignore_case;
         let mut markdown_headings = HashSet::with_capacity(32);
-        let mut markdown_headings_exact = HashSet::with_capacity(32);
+        let mut markdown_headings_exact = if track_exact {
+            HashSet::with_capacity(32)
+        } else {
+            HashSet::new()
+        };
         let mut html_anchors = HashSet::with_capacity(16);
+        let mut html_anchors_exact = if track_exact {
+            HashSet::with_capacity(16)
+        } else {
+            HashSet::new()
+        };
         let mut fragment_counts = std::collections::HashMap::new();
         let use_underscore_dedup = self.config.anchor_style == AnchorStyle::PythonMarkdown;
 
@@ -322,7 +366,10 @@ impl MD051LinkFragments {
                                 {
                                     let id = id_match.as_str();
                                     if !id.is_empty() {
-                                        html_anchors.insert(id.to_string());
+                                        html_anchors.insert(id.to_lowercase());
+                                        if track_exact {
+                                            html_anchors_exact.insert(id.to_string());
+                                        }
                                     }
                                 }
                             }
@@ -343,7 +390,9 @@ impl MD051LinkFragments {
                     if let Some(id_match) = caps.get(1) {
                         let id = id_match.as_str();
                         markdown_headings.insert(id.to_lowercase());
-                        markdown_headings_exact.insert(id.to_string());
+                        if track_exact {
+                            markdown_headings_exact.insert(id.to_string());
+                        }
                     }
                 }
             }
@@ -357,14 +406,16 @@ impl MD051LinkFragments {
             {
                 if let Some(id) = custom_id {
                     markdown_headings.insert(id.to_lowercase());
-                    markdown_headings_exact.insert(id);
+                    if track_exact {
+                        markdown_headings_exact.insert(id);
+                    }
                 }
                 let fragment = self.config.anchor_style.generate_fragment(&clean_text);
                 Self::insert_deduplicated_fragment(
                     fragment,
                     &mut fragment_counts,
                     &mut markdown_headings,
-                    &mut markdown_headings_exact,
+                    track_exact.then_some(&mut markdown_headings_exact),
                     use_underscore_dedup,
                 );
             }
@@ -374,7 +425,9 @@ impl MD051LinkFragments {
                 // Custom ID from {#custom-id} syntax
                 if let Some(custom_id) = &heading.custom_id {
                     markdown_headings.insert(custom_id.to_lowercase());
-                    markdown_headings_exact.insert(custom_id.clone());
+                    if track_exact {
+                        markdown_headings_exact.insert(custom_id.clone());
+                    }
                 }
 
                 // Generate fragment directly from heading text
@@ -386,13 +439,18 @@ impl MD051LinkFragments {
                     fragment,
                     &mut fragment_counts,
                     &mut markdown_headings,
-                    &mut markdown_headings_exact,
+                    track_exact.then_some(&mut markdown_headings_exact),
                     use_underscore_dedup,
                 );
             }
         }
 
-        (markdown_headings, markdown_headings_exact, html_anchors)
+        AnchorSets {
+            markdown_headings,
+            markdown_headings_exact,
+            html_anchors,
+            html_anchors_exact,
+        }
     }
 
     /// Fast check if URL is external (doesn't need to be validated)
@@ -583,11 +641,13 @@ impl Rule for MD051LinkFragments {
             return Ok(warnings);
         }
 
-        let (markdown_headings, markdown_headings_exact, html_anchors) = self.extract_headings_from_context(ctx);
-
-        // Compile the ignored_pattern once. An invalid regex is treated as no filter
-        // (defensive: we never silently swallow violations because of a bad pattern).
-        let ignored_pattern = self.config.ignored_pattern.as_deref().and_then(|s| Regex::new(s).ok());
+        let AnchorSets {
+            markdown_headings,
+            markdown_headings_exact,
+            html_anchors,
+            html_anchors_exact,
+        } = self.extract_headings_from_context(ctx);
+        let ignored_pattern = self.ignored_pattern_regex.as_ref();
 
         for link in &ctx.links {
             if link.is_reference {
@@ -674,19 +734,18 @@ impl Rule for MD051LinkFragments {
             }
 
             // Skip fragments matching the user-configured ignored_pattern
-            if ignored_pattern.as_ref().is_some_and(|re| re.is_match(fragment)) {
+            if ignored_pattern.is_some_and(|re| re.is_match(fragment)) {
                 continue;
             }
 
-            // Validate fragment against document headings.
-            // HTML anchors are always matched case-sensitively. Markdown anchors
-            // honor the `ignore_case` option (default true).
-            let found = if html_anchors.contains(fragment) {
-                true
-            } else if self.config.ignore_case {
-                markdown_headings.contains(&fragment.to_lowercase())
+            // Validate fragment against document headings. Both HTML and
+            // markdown anchors honor the `ignore_case` option, mirroring
+            // markdownlint and the cross-file path.
+            let found = if self.config.ignore_case {
+                let lower = fragment.to_lowercase();
+                html_anchors.contains(&lower) || markdown_headings.contains(&lower)
             } else {
-                markdown_headings_exact.contains(fragment)
+                html_anchors_exact.contains(fragment) || markdown_headings_exact.contains(fragment)
             };
 
             if !found {
@@ -910,10 +969,18 @@ impl Rule for MD051LinkFragments {
             ".rmd",
         ];
 
+        let ignored_pattern = self.ignored_pattern_regex.as_ref();
+        let ignore_case = self.config.ignore_case;
+
         // Check each cross-file link in this file
         for cross_link in &file_index.cross_file_links {
             // Skip cross-file links without fragments - nothing to validate
             if cross_link.fragment.is_empty() {
+                continue;
+            }
+
+            // Honor `ignored-pattern`: skip fragments matching the configured regex.
+            if ignored_pattern.is_some_and(|re| re.is_match(&cross_link.fragment)) {
                 continue;
             }
 
@@ -943,7 +1010,7 @@ impl Rule for MD051LinkFragments {
 
             if let Some(target_file_index) = target_file_index {
                 // Check if the fragment matches any heading in the target file (O(1) lookup)
-                if !target_file_index.has_anchor(&cross_link.fragment) {
+                if !target_file_index.has_anchor_with_case(&cross_link.fragment, ignore_case) {
                     warnings.push(LintWarning {
                         rule_name: Some(self.name().to_string()),
                         line: cross_link.line,

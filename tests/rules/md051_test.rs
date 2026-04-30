@@ -1776,7 +1776,8 @@ Links to test:
 
 #[test]
 fn test_case_sensitivity_html_anchors() {
-    // HTML id attributes are case-sensitive, links should match exactly
+    // Under `ignore_case = false` (markdownlint strict parity), HTML id
+    // attributes are matched case-sensitively, so wrong-case links are flagged.
     let content = r#"# Test Document
 
 <div id="CamelCase">Content</div>
@@ -1789,12 +1790,45 @@ Links to test:
 - [Wrong case LOWERCASE](#LOWERCASE) - should fail
 "#;
 
+    let rule = MD051LinkFragments::from_config_struct(rumdl_lib::rules::md051_link_fragments::MD051Config {
+        ignore_case: false,
+        ..rumdl_lib::rules::md051_link_fragments::MD051Config::default()
+    });
+    let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
+    let result = rule.check(&ctx).unwrap();
+
+    assert_eq!(
+        result.len(),
+        2,
+        "HTML anchors should be case-sensitive when ignore_case=false"
+    );
+}
+
+#[test]
+fn test_case_insensitivity_html_anchors_default_ignore_case() {
+    // Under the default `ignore_case = true`, HTML anchors match
+    // case-insensitively, consistent with cross-file lookups and markdownlint's
+    // `ignoreCase = true` mode.
+    let content = r#"# Test Document
+
+<div id="CamelCase">Content</div>
+<span id="lowercase">Content</span>
+
+Links to test:
+- [Exact match CamelCase](#CamelCase) - should work
+- [Different case camelcase](#camelcase) - should also work
+- [Exact match lowercase](#lowercase) - should work
+- [Different case LOWERCASE](#LOWERCASE) - should also work
+"#;
+
     let rule = MD051LinkFragments::new();
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
 
-    // Should have 2 errors for wrong case
-    assert_eq!(result.len(), 2, "HTML anchors should be case-sensitive");
+    assert!(
+        result.is_empty(),
+        "All HTML anchor links must resolve under ignore_case=true, got {result:?}"
+    );
 }
 
 #[test]
@@ -3078,6 +3112,344 @@ mod ignore_case_tests {
         assert!(
             config.ignore_case,
             "rumdl default ignore_case is true to preserve permissive behavior"
+        );
+    }
+}
+
+mod cross_file_options_tests {
+    use rumdl_lib::config::{Config, MarkdownFlavor};
+    use rumdl_lib::rule::Rule;
+    use rumdl_lib::rules::MD051LinkFragments;
+    use rumdl_lib::rules::md051_link_fragments::MD051Config;
+    use rumdl_lib::workspace_index::WorkspaceIndex;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// Helper: index two files (`source.md` linking to `target.md`) into a workspace.
+    fn build_two_file_workspace(
+        source_content: &str,
+        target_content: &str,
+    ) -> (
+        std::path::PathBuf,
+        rumdl_lib::workspace_index::FileIndex,
+        WorkspaceIndex,
+        tempfile::TempDir,
+    ) {
+        let temp_dir = tempdir().unwrap();
+        let base = temp_dir.path();
+        let source_file = base.join("source.md");
+        let target_file = base.join("target.md");
+        fs::write(&source_file, source_content).unwrap();
+        fs::write(&target_file, target_content).unwrap();
+
+        let rules = rumdl_lib::rules::all_rules(&Config::default());
+        let (_, source_index) =
+            rumdl_lib::lint_and_index(source_content, &rules, false, MarkdownFlavor::default(), None, None);
+        let (_, target_index) =
+            rumdl_lib::lint_and_index(target_content, &rules, false, MarkdownFlavor::default(), None, None);
+
+        let mut workspace_index = WorkspaceIndex::new();
+        workspace_index.insert_file(source_file.clone(), source_index.clone());
+        workspace_index.insert_file(target_file, target_index);
+
+        (source_file, source_index, workspace_index, temp_dir)
+    }
+
+    #[test]
+    fn test_cross_file_ignored_pattern_skips_matching_fragment() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[missing](target.md#fn:1)\n", "# Real heading\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignored_pattern: Some("^fn:".to_string()),
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert!(
+            warnings.is_empty(),
+            "cross-file fragment matching ignored_pattern must be skipped, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignored_pattern_does_not_skip_non_matching_fragment() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[missing](target.md#other-missing)\n", "# Real heading\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignored_pattern: Some("^fn:".to_string()),
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "non-matching cross-file fragment must still warn, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_default_true_accepts_case_mismatch() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#MY-HEADING)\n", "# My Heading\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config::default());
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert!(
+            warnings.is_empty(),
+            "default ignore_case=true must accept cross-file case-only mismatches, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_false_warns_on_case_mismatch() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#MY-HEADING)\n", "# My Heading\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "ignore_case=false must flag cross-file case-only mismatch, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_false_accepts_exact_match() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#my-heading)\n", "# My Heading\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert!(
+            warnings.is_empty(),
+            "ignore_case=false must accept cross-file exact-case match, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_false_accepts_html_anchor_exact_case() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#MyAnchor)\n", "<a id=\"MyAnchor\">target</a>\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert!(
+            warnings.is_empty(),
+            "ignore_case=false must accept cross-file HTML anchor with matching original case, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_false_warns_on_html_anchor_case_mismatch() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#myanchor)\n", "<a id=\"MyAnchor\">target</a>\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "ignore_case=false must flag cross-file HTML anchor case mismatch, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_true_accepts_html_anchor_case_mismatch() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#myanchor)\n", "<a id=\"MyAnchor\">target</a>\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config::default());
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert!(
+            warnings.is_empty(),
+            "default ignore_case=true must accept cross-file HTML anchor case-only mismatches, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_false_accepts_attribute_anchor_exact_case() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#MyAttr)\n", "Some text { #MyAttr }\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert!(
+            warnings.is_empty(),
+            "ignore_case=false must accept cross-file attribute anchor with matching original case, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_false_warns_on_attribute_anchor_case_mismatch() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#myattr)\n", "Some text { #MyAttr }\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "ignore_case=false must flag cross-file attribute anchor case mismatch, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_false_accepts_custom_heading_id_exact_case() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#CustomID)\n", "## Heading {#CustomID}\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert!(
+            warnings.is_empty(),
+            "ignore_case=false must accept cross-file custom heading ID exact-case, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_ignore_case_false_warns_on_custom_heading_id_case_mismatch() {
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[link](target.md#customid)\n", "## Heading {#CustomID}\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignore_case: false,
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "ignore_case=false must flag cross-file custom heading ID case mismatch, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_ignored_pattern_falls_back_gracefully() {
+        // An unterminated character class like "[unterminated" must not panic and
+        // must not silently swallow violations — fragments are validated normally.
+        let (source_file, source_index, workspace_index, _td) =
+            build_two_file_workspace("[broken](target.md#missing)\n", "# Real\n");
+
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignored_pattern: Some("[unterminated".to_string()),
+            ..MD051Config::default()
+        });
+        let warnings = rule
+            .cross_file_check(&source_file, &source_index, &workspace_index)
+            .unwrap();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "invalid ignored_pattern must fall back to no filter and still warn on missing fragments, got {warnings:?}"
+        );
+    }
+}
+
+mod same_doc_html_anchor_consistency_tests {
+    //! Same-document HTML anchor matching must honor `ignore_case` identically
+    //! to cross-file lookups, so users get the same behavior whether linking
+    //! within a file or across files.
+
+    use rumdl_lib::config::MarkdownFlavor;
+    use rumdl_lib::lint_context::LintContext;
+    use rumdl_lib::rule::Rule;
+    use rumdl_lib::rules::MD051LinkFragments;
+    use rumdl_lib::rules::md051_link_fragments::MD051Config;
+
+    fn check(content: &str, ignore_case: bool) -> Vec<rumdl_lib::rule::LintWarning> {
+        let rule = MD051LinkFragments::from_config_struct(MD051Config {
+            ignore_case,
+            ..MD051Config::default()
+        });
+        let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+        rule.check(&ctx).unwrap()
+    }
+
+    #[test]
+    fn test_same_doc_ignore_case_true_accepts_html_anchor_case_mismatch() {
+        let content = "<a id=\"MyAnchor\">target</a>\n\n[link](#myanchor)\n";
+        let warnings = check(content, true);
+        assert!(
+            warnings.is_empty(),
+            "ignore_case=true must accept same-doc HTML anchor case-only mismatches, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_same_doc_ignore_case_false_warns_on_html_anchor_case_mismatch() {
+        let content = "<a id=\"MyAnchor\">target</a>\n\n[link](#myanchor)\n";
+        let warnings = check(content, false);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "ignore_case=false must flag same-doc HTML anchor case mismatch, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_same_doc_ignore_case_false_accepts_html_anchor_exact_match() {
+        let content = "<a id=\"MyAnchor\">target</a>\n\n[link](#MyAnchor)\n";
+        let warnings = check(content, false);
+        assert!(
+            warnings.is_empty(),
+            "ignore_case=false must accept same-doc HTML anchor exact-case match, got {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_same_doc_ignore_case_true_accepts_html_anchor_exact_match() {
+        let content = "<a id=\"MyAnchor\">target</a>\n\n[link](#MyAnchor)\n";
+        let warnings = check(content, true);
+        assert!(
+            warnings.is_empty(),
+            "ignore_case=true must accept same-doc HTML anchor exact-case match, got {warnings:?}"
         );
     }
 }

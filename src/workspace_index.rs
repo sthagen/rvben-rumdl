@@ -239,7 +239,7 @@ const CACHE_MAGIC: &[u8; 4] = b"RWSI";
 
 /// Cache format version - increment when WorkspaceIndex serialization changes
 #[cfg(feature = "native")]
-const CACHE_FORMAT_VERSION: u32 = 5;
+const CACHE_FORMAT_VERSION: u32 = 6;
 
 /// Cache file name within the version directory
 #[cfg(feature = "native")]
@@ -277,13 +277,26 @@ pub struct FileIndex {
     /// O(1) anchor lookup: lowercased anchor → heading index
     /// Includes both auto-generated and custom anchors
     anchor_to_heading: HashMap<String, usize>,
-    /// HTML anchors defined via `<a id="...">` or `<element id="...">` tags
-    /// Stored lowercase for case-insensitive matching
+    /// O(1) anchor lookup with original case preserved → heading index.
+    /// Used for `ignore_case = false` (markdownlint strict parity). Skipped at
+    /// query time when the lowercase map is sufficient.
+    #[serde(default)]
+    anchor_to_heading_exact: HashMap<String, usize>,
+    /// HTML anchors defined via `<a id="...">` or `<element id="...">` tags.
+    /// Stored lowercase for case-insensitive matching.
     html_anchors: HashSet<String>,
-    /// Attribute anchors defined via { #id } syntax (kramdown/MkDocs attr_list)
-    /// Can appear on any element, not just headings
-    /// Stored lowercase for case-insensitive matching
+    /// HTML anchors with original case preserved.
+    /// Used for `ignore_case = false` (markdownlint strict parity).
+    #[serde(default)]
+    html_anchors_exact: HashSet<String>,
+    /// Attribute anchors defined via { #id } syntax (kramdown/MkDocs attr_list).
+    /// Can appear on any element, not just headings.
+    /// Stored lowercase for case-insensitive matching.
     attribute_anchors: HashSet<String>,
+    /// Attribute anchors with original case preserved.
+    /// Used for `ignore_case = false` (markdownlint strict parity).
+    #[serde(default)]
+    attribute_anchors_exact: HashSet<String>,
     /// Rules disabled for the entire file (from inline comments)
     /// Used by cross-file rules to respect inline disable directives
     pub file_disabled_rules: HashSet<String>,
@@ -680,16 +693,21 @@ impl FileIndex {
 
     /// Add a heading to the index
     ///
-    /// Also updates the anchor lookup map for O(1) anchor queries
+    /// Also updates the anchor lookup maps for O(1) anchor queries. Both
+    /// lowercased (for `ignore_case = true`) and case-preserving (for
+    /// `ignore_case = false`) maps are populated.
     pub fn add_heading(&mut self, heading: HeadingIndex) {
         let index = self.headings.len();
 
-        // Add auto-generated anchor to lookup map (lowercased for case-insensitive matching)
+        // Auto-generated anchor — slugs are already lowercase, but we still
+        // populate both maps so query-time dispatch is uniform.
         self.anchor_to_heading.insert(heading.auto_anchor.to_lowercase(), index);
+        self.anchor_to_heading_exact.insert(heading.auto_anchor.clone(), index);
 
-        // Add custom anchor if present
+        // Custom anchor preserves original case as written by the author.
         if let Some(ref custom) = heading.custom_anchor {
             self.anchor_to_heading.insert(custom.to_lowercase(), index);
+            self.anchor_to_heading_exact.insert(custom.clone(), index);
         }
 
         self.headings.push(heading);
@@ -700,6 +718,7 @@ impl FileIndex {
     pub fn add_anchor_alias(&mut self, anchor: &str, heading_index: usize) {
         if heading_index < self.headings.len() {
             self.anchor_to_heading.insert(anchor.to_lowercase(), heading_index);
+            self.anchor_to_heading_exact.insert(anchor.to_string(), heading_index);
         }
     }
 
@@ -714,40 +733,63 @@ impl FileIndex {
     /// Matching is case-insensitive. URL-encoded anchors (e.g., CJK characters
     /// like `%E6%97%A5%E6%9C%AC%E8%AA%9E` for `日本語`) are decoded before matching.
     pub fn has_anchor(&self, anchor: &str) -> bool {
-        let lower = anchor.to_lowercase();
+        self.has_anchor_with_case(anchor, true)
+    }
 
-        // Fast path: try exact match first
-        if self.anchor_to_heading.contains_key(&lower)
-            || self.html_anchors.contains(&lower)
-            || self.attribute_anchors.contains(&lower)
-        {
+    /// Check if an anchor exists in this file, with explicit case sensitivity.
+    ///
+    /// When `ignore_case` is `true`, behaves identically to [`has_anchor`] —
+    /// inputs are lowercased and matched against the lowercase storage.
+    /// When `false`, the input is compared as-is against parallel
+    /// case-preserving storage, matching markdownlint's strict behavior for
+    /// generated heading slugs, custom heading IDs, HTML anchors, and
+    /// attribute anchors.
+    pub fn has_anchor_with_case(&self, anchor: &str, ignore_case: bool) -> bool {
+        if self.lookup_anchor(anchor, ignore_case) {
             return true;
         }
 
         // Slow path: if anchor contains percent-encoding, try decoded version
         if anchor.contains('%') {
-            let decoded = url_decode(anchor).to_lowercase();
-            if decoded != lower {
-                return self.anchor_to_heading.contains_key(&decoded)
-                    || self.html_anchors.contains(&decoded)
-                    || self.attribute_anchors.contains(&decoded);
+            let decoded = url_decode(anchor);
+            if decoded != anchor {
+                return self.lookup_anchor(&decoded, ignore_case);
             }
         }
 
         false
     }
 
-    /// Add an HTML anchor (from `<a id="...">` or `<element id="...">` tags)
-    pub fn add_html_anchor(&mut self, anchor: &str) {
-        if !anchor.is_empty() {
-            self.html_anchors.insert(anchor.to_lowercase());
+    /// Direct anchor lookup, dispatching to the lowercase or exact-case
+    /// storage based on `ignore_case`.
+    fn lookup_anchor(&self, anchor: &str, ignore_case: bool) -> bool {
+        if ignore_case {
+            let lower = anchor.to_lowercase();
+            self.anchor_to_heading.contains_key(&lower)
+                || self.html_anchors.contains(&lower)
+                || self.attribute_anchors.contains(&lower)
+        } else {
+            self.anchor_to_heading_exact.contains_key(anchor)
+                || self.html_anchors_exact.contains(anchor)
+                || self.attribute_anchors_exact.contains(anchor)
         }
     }
 
-    /// Add an attribute anchor (from { #id } syntax on non-heading elements)
+    /// Add an HTML anchor (from `<a id="...">` or `<element id="...">` tags).
+    /// Populates both lowercase (case-insensitive) and case-preserving sets.
+    pub fn add_html_anchor(&mut self, anchor: &str) {
+        if !anchor.is_empty() {
+            self.html_anchors.insert(anchor.to_lowercase());
+            self.html_anchors_exact.insert(anchor.to_string());
+        }
+    }
+
+    /// Add an attribute anchor (from { #id } syntax on non-heading elements).
+    /// Populates both lowercase (case-insensitive) and case-preserving sets.
     pub fn add_attribute_anchor(&mut self, anchor: &str) {
         if !anchor.is_empty() {
             self.attribute_anchors.insert(anchor.to_lowercase());
+            self.attribute_anchors_exact.insert(anchor.to_string());
         }
     }
 
