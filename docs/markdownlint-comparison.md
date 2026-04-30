@@ -360,6 +360,9 @@ boundaries.
 **MD013 (line-length):** rumdl exempts entire lines that are completely unbreakable (URLs with no spaces, long code spans). It also supports `line_length = 0` to mean unlimited. markdownlint exempts
 more selectively.
 
+**MD027 (no-multiple-space-blockquote):** rumdl's `list-items` option defaults to `false`; markdownlint's `list_items` defaults to `true`. List items inside blockquotes inherently need extra
+indentation (`>  - item`, continuation lines), so flagging them by default produces noise. Set `list-items = true` to opt into strict markdownlint behavior.
+
 **MD029 (ordered-list-prefix):** rumdl uses CommonMark AST start values. A list starting at `11` expects items 11, 12, 13. rumdl only auto-fixes when `start_value == 1` to preserve explicit numbering
 intent.
 

@@ -268,7 +268,7 @@ fn test_md026_fix_idempotent() {
 
 #[test]
 fn test_md027_fix_idempotent() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = ">  Multiple spaces\n>   More spaces\n";
     assert_fix_idempotent(&rule, content, "MD027");
 }

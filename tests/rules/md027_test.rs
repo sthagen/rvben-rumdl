@@ -4,7 +4,7 @@ use rumdl_lib::rules::MD027MultipleSpacesBlockquote;
 
 #[test]
 fn test_md027_valid() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = "> Quote\n> Another line\n> Third line\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
@@ -13,7 +13,7 @@ fn test_md027_valid() {
 
 #[test]
 fn test_md027_invalid() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = ">  Quote\n>   Another line\n>    Third line\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
@@ -25,7 +25,7 @@ fn test_md027_invalid() {
 
 #[test]
 fn test_md027_mixed() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = "> Quote\n>  Another line\n> Third line\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
@@ -35,7 +35,7 @@ fn test_md027_mixed() {
 
 #[test]
 fn test_md027_fix() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = ">  Quote\n>   Another line\n>    Third line\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.fix(&ctx).unwrap();
@@ -53,7 +53,7 @@ fn test_md027_fix() {
 /// Per CommonMark: HTML block continues until blank line
 #[test]
 fn test_md027_html_block_no_blank_after_closing_div() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = "<div>\ncontent\n</div>\n>  After div no blank\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
@@ -69,7 +69,7 @@ fn test_md027_html_block_no_blank_after_closing_div() {
 /// The blank line terminates the HTML block, so the blockquote IS markdown
 #[test]
 fn test_md027_html_block_with_blank_after_closing_div() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = "<div>\ncontent\n</div>\n\n>  After div with blank\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
@@ -81,7 +81,7 @@ fn test_md027_html_block_with_blank_after_closing_div() {
 /// Test: Table with blockquote-like content in cells
 #[test]
 fn test_md027_table_with_gt_symbols() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = "<table>\n<tr>\n<td>>  Cell content</td>\n</tr>\n</table>\n>  After table\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
@@ -96,7 +96,7 @@ fn test_md027_table_with_gt_symbols() {
 /// Test: Nested HTML blocks with blockquote-like content
 #[test]
 fn test_md027_nested_html_blocks() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = "<div>\n<table>\n>  In nested HTML\n</table>\n>  Still in div\n</div>\n>  After div\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
@@ -111,7 +111,7 @@ fn test_md027_nested_html_blocks() {
 /// Test: Multiple HTML blocks with varying blank line patterns
 #[test]
 fn test_md027_multiple_html_blocks() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = r#"<div>
 content
 </div>
@@ -133,7 +133,7 @@ more
 /// Test: HTML5 media elements (figure, video, audio, picture)
 #[test]
 fn test_md027_html5_media_elements() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = r#"<figure>
 >  Figure caption
 </figure>
@@ -157,7 +157,7 @@ fn test_md027_html5_media_elements() {
 /// Test: Self-closing tags followed by blockquote-like content
 #[test]
 fn test_md027_self_closing_tags() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     // Self-closing tags like <br/> don't create block context
     // So >  after them should flag
     let content = "<br/>\n>  After self-closing\n";
@@ -170,7 +170,7 @@ fn test_md027_self_closing_tags() {
 /// Test: HTML block with style tag (can contain blank lines)
 #[test]
 fn test_md027_style_tag_allows_blanks() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = "<style>\n.class {\n  color: red;\n}\n\n.other {\n  color: blue;\n}\n</style>\n>  After style\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
@@ -186,7 +186,7 @@ fn test_md027_style_tag_allows_blanks() {
 /// Verify fix() produces the same result when applied twice (idempotency)
 #[test]
 fn test_md027_fix_idempotent() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let cases = vec![
         ">  Two spaces\n>   Three spaces\n",
         ">  Two spaces\n> Normal\n>    Four spaces\n",
@@ -208,7 +208,7 @@ fn test_md027_fix_idempotent() {
 /// Verify that every warning from check() has a Fix struct
 #[test]
 fn test_md027_all_warnings_have_fixes() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let cases = vec![
         ">  Two spaces\n",
         ">   Three spaces\n",
@@ -236,7 +236,7 @@ fn test_md027_all_warnings_have_fixes() {
 fn test_md027_check_fix_roundtrip() {
     use rumdl_lib::utils::fix_utils::apply_warning_fixes;
 
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let cases = vec![
         ">  Two spaces\n>   Three spaces\n",
         ">  Two spaces\n> Normal\n>    Four spaces\n",
@@ -260,7 +260,7 @@ fn test_md027_check_fix_roundtrip() {
 
 #[test]
 fn test_md027_script_tag_allows_blanks() {
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
     let content = "<script>\nfunction test() {\n  return true;\n}\n\nconsole.log();\n</script>\n>  After script\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();

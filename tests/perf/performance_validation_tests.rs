@@ -103,7 +103,7 @@ fn test_deeply_nested_structures() {
     }
 
     let rules: Vec<Box<dyn Rule>> = vec![
-        Box::new(MD027MultipleSpacesBlockquote),
+        Box::new(MD027MultipleSpacesBlockquote::default()),
         Box::new(MD007ULIndent::new(2)),
         Box::new(MD005ListIndent::default()),
     ];

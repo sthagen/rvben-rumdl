@@ -132,7 +132,7 @@ fn create_test_case_for_rule(rule_name: &str) -> Option<(&'static str, Box<dyn R
         "MD026" => Some(("# Heading!", Box::new(MD026NoTrailingPunctuation::default()))),
         "MD027" => Some((
             ">  Multiple spaces in blockquote",
-            Box::new(MD027MultipleSpacesBlockquote),
+            Box::new(MD027MultipleSpacesBlockquote::default()),
         )),
         "MD028" => Some(("> Quote\n>\n> More quote", Box::new(MD028NoBlanksBlockquote))),
         "MD029" => Some((
@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_md027_vscode_fix_no_duplication() {
-        let rule = MD027MultipleSpacesBlockquote;
+        let rule = MD027MultipleSpacesBlockquote::default();
         let content = ">  Multiple spaces in blockquote";
 
         let result = simulate_vscode_fix(content, &rule);

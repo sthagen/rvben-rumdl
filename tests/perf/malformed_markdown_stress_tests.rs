@@ -54,7 +54,7 @@ fn test_deeply_nested_blockquotes() {
     }
 
     let rules: Vec<Box<dyn Rule>> = vec![
-        Box::new(MD027MultipleSpacesBlockquote),
+        Box::new(MD027MultipleSpacesBlockquote::default()),
         Box::new(MD028NoBlanksBlockquote),
     ];
 

@@ -155,7 +155,7 @@ proptest! {
             Box::new(MD024NoDuplicateHeading::default()),
             Box::new(MD025SingleTitle::default()),
             Box::new(MD026NoTrailingPunctuation::default()),
-            Box::new(MD027MultipleSpacesBlockquote),
+            Box::new(MD027MultipleSpacesBlockquote::default()),
             Box::new(MD028NoBlanksBlockquote),
             Box::new(MD029OrderedListPrefix::default()),
             Box::new(MD030ListMarkerSpace::default()),
@@ -494,7 +494,7 @@ proptest! {
 
     #[test]
     fn test_md027_idempotent(content in markdown_content_strategy()) {
-        let rule = MD027MultipleSpacesBlockquote;
+        let rule = MD027MultipleSpacesBlockquote::default();
 
         let ctx1 = LintContext::new(&content, MarkdownFlavor::Standard, None);
         let warnings1 = rule.check(&ctx1).unwrap_or_default();

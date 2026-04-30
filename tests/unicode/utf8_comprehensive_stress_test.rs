@@ -113,7 +113,7 @@ fn get_all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(MD024NoDuplicateHeading::default()),
         Box::new(MD025SingleTitle::default()),
         Box::new(MD026NoTrailingPunctuation::default()),
-        Box::new(MD027MultipleSpacesBlockquote),
+        Box::new(MD027MultipleSpacesBlockquote::default()),
         Box::new(MD028NoBlanksBlockquote),
         Box::new(MD029OrderedListPrefix::default()),
         Box::new(MD030ListMarkerSpace::default()),

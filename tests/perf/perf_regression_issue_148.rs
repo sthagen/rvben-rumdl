@@ -73,7 +73,7 @@ fn test_md027_linear_complexity() {
     for &size in &sizes {
         let content = generate_list_document(size);
         let ctx = LintContext::new(&content, rumdl_lib::config::MarkdownFlavor::Standard, None);
-        let rule = MD027MultipleSpacesBlockquote;
+        let rule = MD027MultipleSpacesBlockquote::default();
 
         let start = Instant::now();
         let warnings = rule.check(&ctx).unwrap();
@@ -161,7 +161,7 @@ fn test_large_document_performance() {
     println!("Testing large document: {} bytes", content.len());
 
     let ctx = LintContext::new(&content, rumdl_lib::config::MarkdownFlavor::Standard, None);
-    let rule = MD027MultipleSpacesBlockquote;
+    let rule = MD027MultipleSpacesBlockquote::default();
 
     let start = Instant::now();
     let warnings = rule.check(&ctx).unwrap();
@@ -183,7 +183,7 @@ fn test_combined_rules_performance() {
     let content = generate_list_document(1000);
     let ctx = LintContext::new(&content, rumdl_lib::config::MarkdownFlavor::Standard, None);
 
-    let md027 = MD027MultipleSpacesBlockquote;
+    let md027 = MD027MultipleSpacesBlockquote::default();
     let md020 = MD020NoMissingSpaceClosedAtx;
 
     let start = Instant::now();
