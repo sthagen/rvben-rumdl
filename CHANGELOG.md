@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.86](https://github.com/rvben/rumdl/compare/v0.1.85...v0.1.86) - 2026-05-01
+
+### Added
+
+- **cli**: support inline TOML overrides via --config ([ae5461f](https://github.com/rvben/rumdl/commit/ae5461f2b0d4eaf4724b3d800b82f90b45c949fc))
+
 ## [0.1.85](https://github.com/rvben/rumdl/compare/v0.1.84...v0.1.85) - 2026-04-30
 
 ### Added
