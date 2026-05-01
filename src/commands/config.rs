@@ -13,6 +13,7 @@ use crate::cli_utils::load_config_with_cli_error_handling;
 use crate::formatter;
 
 /// Handle the config command: show or query configuration.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_config(
     subcmd: Option<ConfigSubcommand>,
     defaults: bool,
@@ -21,6 +22,7 @@ pub fn handle_config(
     config_path: Option<&str>,
     no_config: bool,
     isolated: bool,
+    inline_overrides: &[toml::Table],
 ) {
     // Validate mutual exclusivity of --defaults and --no-defaults
     if defaults && no_defaults {
@@ -33,24 +35,33 @@ pub fn handle_config(
 
     // Handle config subcommands
     if let Some(ConfigSubcommand::Get { key }) = subcmd {
-        handle_config_get(&key, config_path, no_config);
+        handle_config_get(&key, config_path, no_config, inline_overrides);
     } else if let Some(ConfigSubcommand::File) = subcmd {
         handle_config_file(config_path, no_config, isolated);
     } else {
         // No subcommand: display full config
-        handle_config_display(defaults, no_defaults, output, config_path, no_config, isolated);
+        handle_config_display(
+            defaults,
+            no_defaults,
+            output,
+            config_path,
+            no_config,
+            isolated,
+            inline_overrides,
+        );
     }
 }
 
-fn handle_config_get(key: &str, config_path: Option<&str>, no_config: bool) {
+fn handle_config_get(key: &str, config_path: Option<&str>, no_config: bool, inline_overrides: &[toml::Table]) {
     // Load config once; both dot-key and bare-rule paths use the same sourced state.
-    let sourced = match rumdl_config::SourcedConfig::load_with_discovery(config_path, None, no_config) {
+    let mut sourced = match rumdl_config::SourcedConfig::load_with_discovery(config_path, None, no_config) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("{}: {}", "Config error".red().bold(), e);
             exit::tool_error();
         }
     };
+    crate::cli_config_override::apply_inline_overrides(&mut sourced, inline_overrides);
     // config-get doesn't emit validation warnings; convert directly.
     let final_config: rumdl_config::Config = sourced.clone().into_validated_unchecked().into();
 
@@ -263,10 +274,11 @@ fn handle_config_display(
     config_path: Option<&str>,
     no_config: bool,
     isolated: bool,
+    inline_overrides: &[toml::Table],
 ) {
     let registry = rumdl_config::default_registry();
     let all_rules_reg = rumdl_lib::rules::all_rules(&rumdl_config::Config::default());
-    let sourced_reg = if defaults {
+    let mut sourced_reg = if defaults {
         // For defaults, create a SourcedConfig that includes all rule defaults
         let mut default_sourced = rumdl_config::SourcedConfig::default();
 
@@ -288,6 +300,9 @@ fn handle_config_display(
     } else {
         load_config_with_cli_error_handling(config_path, no_config || isolated)
     };
+    if !defaults {
+        crate::cli_config_override::apply_inline_overrides(&mut sourced_reg, inline_overrides);
+    }
     let validation_warnings = rumdl_config::validate_config_sourced(&sourced_reg, registry);
     if !validation_warnings.is_empty() {
         for warn in &validation_warnings {

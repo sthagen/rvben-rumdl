@@ -59,13 +59,22 @@ pub fn clear_screen() {
 }
 
 /// Run the linter in watch mode, re-running on file changes
-pub fn run_watch_mode(args: &crate::CheckArgs, global_config_path: Option<&str>, isolated: bool, quiet: bool) {
+pub fn run_watch_mode(
+    args: &crate::CheckArgs,
+    global_config_path: Option<&str>,
+    isolated: bool,
+    quiet: bool,
+    inline_overrides: &[toml::Table],
+) {
     // Always use current directory for config discovery to ensure config files are found
     // when pre-commit or other tools pass relative file paths
     let discovery_dir = None;
 
     // Load initial configuration
     let mut sourced = crate::load_config_with_cli_error_handling_with_dir(global_config_path, isolated, discovery_dir);
+
+    // Apply inline `--config` rule overrides at CLI precedence
+    crate::cli_config_override::apply_inline_overrides(&mut sourced, inline_overrides);
 
     // Apply CLI argument overrides (e.g., --flavor)
     crate::apply_cli_overrides(&mut sourced, args);
@@ -177,6 +186,9 @@ pub fn run_watch_mode(args: &crate::CheckArgs, global_config_path: Option<&str>,
                                 isolated,
                                 discovery_dir,
                             );
+
+                            // Re-apply inline `--config` rule overrides
+                            crate::cli_config_override::apply_inline_overrides(&mut sourced, inline_overrides);
 
                             // Re-apply CLI argument overrides (e.g., --flavor)
                             crate::apply_cli_overrides(&mut sourced, args);

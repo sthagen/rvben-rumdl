@@ -20,6 +20,7 @@ pub mod validation;
 pub use validation::*;
 
 mod parsers;
+pub use parsers::is_global_value_key;
 
 #[cfg(test)]
 mod tests;

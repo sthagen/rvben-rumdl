@@ -9,7 +9,7 @@ use crate::cli_utils::{apply_cli_overrides, load_config_with_cli_error_handling_
 use crate::{CheckArgs, FailOn, FixMode};
 
 /// Run the check/lint/fmt command.
-pub fn run_check(args: &CheckArgs, global_config_path: Option<&str>, isolated: bool) {
+pub fn run_check(args: &CheckArgs, global_config_path: Option<&str>, isolated: bool, inline_overrides: &[toml::Table]) {
     let quiet = args.quiet;
     let silent = args.silent;
 
@@ -38,7 +38,7 @@ pub fn run_check(args: &CheckArgs, global_config_path: Option<&str>, isolated: b
 
     // Check for watch mode
     if args.watch {
-        crate::watch::run_watch_mode(args, global_config_path, isolated, quiet);
+        crate::watch::run_watch_mode(args, global_config_path, isolated, quiet, inline_overrides);
         return;
     }
 
@@ -59,6 +59,11 @@ pub fn run_check(args: &CheckArgs, global_config_path: Option<&str>, isolated: b
 
     // 2. Load sourced config (for provenance and validation)
     let mut sourced = load_config_with_cli_error_handling_with_dir(global_config_path, isolated, discovery_dir);
+
+    // 2b. Apply inline `--config 'RULE.key=value'` overrides at CLI precedence
+    // (highest), so they win over both file-loaded values and any later CLI
+    // arg overrides that touch top-level globals.
+    crate::cli_config_override::apply_inline_overrides(&mut sourced, inline_overrides);
 
     // 3. Validate configuration
     let registry = rumdl_config::default_registry();

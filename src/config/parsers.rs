@@ -487,7 +487,7 @@ const GLOBAL_VALUE_KEYS: &[&str] = &[
 ];
 
 /// Returns true if the given key is a known global config key.
-fn is_global_value_key(key: &str) -> bool {
+pub fn is_global_value_key(key: &str) -> bool {
     GLOBAL_VALUE_KEYS.contains(&key)
 }
 

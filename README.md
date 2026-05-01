@@ -276,6 +276,10 @@ Common usage examples:
 # Lint with custom configuration
 rumdl check --config my-config.toml docs/
 
+# Override config inline without touching any file (Ruff-compatible syntax)
+rumdl check --config 'MD013.line-length=120' --config 'MD013.reflow=true' docs/
+# See docs/cli-config-overrides.md for the full reference.
+
 # Disable specific rules
 rumdl check --disable MD013,MD033 README.md
 

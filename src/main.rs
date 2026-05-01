@@ -8,6 +8,9 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod cli_config_override;
+pub use cli_config_override::{SingleConfigArgument, apply_inline_overrides, split_config_args};
+
 mod cli_types;
 pub use cli_types::{CheckArgs, FailOn, FixMode, FmtArgs};
 
@@ -40,15 +43,27 @@ struct Cli {
     #[arg(long, global = true, default_value_t, value_enum)]
     color: Color,
 
-    /// Path to configuration file
+    /// Path to a configuration file, or an inline TOML override.
+    ///
+    /// May be passed multiple times. Each value is either a path to a TOML
+    /// configuration file or an inline `KEY = VALUE` snippet that overrides
+    /// configuration options at the highest precedence:
+    ///
+    ///   - Rule option: `--config 'MD013.line-length = 20'`
+    ///   - Global option: `--config 'line-length = 20'`
+    ///   - Explicit global section: `--config 'global.line-length = 20'`
+    ///
+    /// At most one value may be a file path; the rest must be inline TOML.
+    /// Inline overrides remain in effect when combined with `--no-config`
+    /// /`--isolated` (the file path is rejected, but inline values still apply).
     #[arg(
         long,
         short = 'c',
         global = true,
-        help = "Path to configuration file",
-        conflicts_with_all = ["no_config", "isolated"]
+        value_name = "CONFIG_OPTION",
+        help = "Path to a configuration file, or an inline TOML override (e.g. `MD013.reflow=true`). Can be passed multiple times."
     )]
-    config: Option<String>,
+    config: Vec<SingleConfigArgument>,
 
     /// Ignore all configuration files and use built-in defaults
     #[arg(
@@ -249,20 +264,38 @@ fn main() -> Result<(), Box<dyn Error>> {
         Color::Auto => colored::control::unset_override(),
     }
 
-    // Validate --config path upfront so any subcommand that accepts it fails
-    // loudly on a missing path rather than silently ignoring the flag. This
-    // also catches misuse of the new `-c` short alias on subcommands like
-    // `rumdl rule`, which used to treat `-c` as the short form of --category.
-    if let Some(ref path) = cli.config
-        && !std::path::Path::new(path).is_file()
-    {
-        eprintln!("error: config file not found: {path}");
-        if matches!(cli.command, Commands::Rule { .. }) {
-            eprintln!("note: `-c` is the short alias for `--config`.");
-            eprintln!("      To filter rules by category, use `--category {path}`.");
+    // Split --config args into at most one file path plus zero or more inline
+    // overrides. The clap value parser already validated each item is either a
+    // path or a TOML snippet; here we enforce single-path semantics, validate
+    // that the path exists (matching pre-existing UX), and honor the
+    // `--config` + `--no-config` mutual exclusion only for file paths.
+    let (config_path, inline_overrides) = match split_config_args(&cli.config) {
+        Ok(parts) => parts,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            exit::tool_error();
         }
-        exit::tool_error();
+    };
+    if let Some(ref path) = config_path {
+        if (cli.no_config || cli.isolated)
+            && !matches!(cli.command, Commands::Rule { .. } | Commands::Clean | Commands::Version)
+        {
+            eprintln!("error: the argument '--config <CONFIG_OPTION>' (file path) cannot be used with '--no-config'");
+            exit::tool_error();
+        }
+        if !path.is_file() {
+            eprintln!("error: config file not found: {}", path.display());
+            if matches!(cli.command, Commands::Rule { .. }) {
+                eprintln!("note: `-c` is the short alias for `--config`.");
+                eprintln!(
+                    "      To filter rules by category, use `--category {}`.",
+                    path.display()
+                );
+            }
+            exit::tool_error();
+        }
     }
+    let config_path: Option<String> = config_path.map(|p| p.to_string_lossy().into_owned());
 
     // Catch panics and print a message, exit 1
     let result = std::panic::catch_unwind(|| {
@@ -289,9 +322,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let config_path = if cli.no_config || cli.isolated {
                     None
                 } else {
-                    cli.config.as_deref()
+                    config_path.as_deref()
                 };
-                commands::check::run_check(&args, config_path, cli.no_config || cli.isolated);
+                commands::check::run_check(&args, config_path, cli.no_config || cli.isolated, &inline_overrides);
             }
             Commands::Fmt(args) => {
                 let mut args: CheckArgs = args.into();
@@ -306,9 +339,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let config_path = if cli.no_config || cli.isolated {
                     None
                 } else {
-                    cli.config.as_deref()
+                    config_path.as_deref()
                 };
-                commands::check::run_check(&args, config_path, cli.no_config || cli.isolated);
+                commands::check::run_check(&args, config_path, cli.no_config || cli.isolated, &inline_overrides);
             }
             Commands::Rule {
                 rule,
@@ -334,9 +367,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     defaults,
                     no_defaults,
                     output,
-                    cli.config.as_deref(),
+                    config_path.as_deref(),
                     cli.no_config,
                     cli.isolated,
+                    &inline_overrides,
                 );
             }
             Commands::Schema { action } => {
@@ -365,7 +399,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 commands::completions::handle_completions(shell, list);
             }
             Commands::Clean => {
-                commands::clean::handle_clean(cli.config.as_deref(), cli.no_config, cli.isolated);
+                commands::clean::handle_clean(config_path.as_deref(), cli.no_config, cli.isolated);
             }
             Commands::Version => {
                 commands::version::handle_version();

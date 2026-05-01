@@ -11,6 +11,9 @@ Global settings are configured in the `[global]` section of your configuration f
 > header, similar to [ruff.toml](https://docs.astral.sh/ruff/settings/). If both top-level and `[global]`
 > keys exist, the `[global]` section takes precedence. See [Top-level shorthand](#top-level-shorthand) for
 > details.
+>
+> **Tip:** Any of these settings can also be overridden ad hoc on the command line via
+> `--config 'KEY=VALUE'`. See [CLI `--config` Overrides](cli-config-overrides.md) for the full syntax.
 
 ## Quick Reference
 
