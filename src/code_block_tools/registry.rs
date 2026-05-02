@@ -296,11 +296,11 @@ static BUILTIN_TOOLS: LazyLock<HashMap<&'static str, ToolDefinition>> = LazyLock
     m.insert(
         "yamlfmt",
         ToolDefinition {
-            command: vec!["yamlfmt".to_string(), "-".to_string()],
+            command: vec!["yamlfmt".to_string()],
             stdin: true,
             stdout: true,
-            lint_args: vec!["-dry".to_string()],
-            format_args: vec![],
+            lint_args: vec!["-lint".to_string(), "-".to_string()],
+            format_args: vec!["-".to_string()],
         },
     );
 
@@ -612,6 +612,17 @@ mod tests {
 
         let tool = registry.get("shellcheck").expect("Should find shellcheck");
         assert!(tool.command.contains(&"shellcheck".to_string()));
+    }
+
+    #[test]
+    fn test_builtin_yamlfmt_lint_command_validates_stdin() {
+        let registry = ToolRegistry::default();
+
+        let tool = registry.get("yamlfmt").expect("Should find yamlfmt");
+        let mut argv = tool.command.clone();
+        argv.extend(tool.lint_args.clone());
+
+        assert_eq!(argv, vec!["yamlfmt", "-lint", "-"]);
     }
 
     #[test]
