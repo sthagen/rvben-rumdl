@@ -602,6 +602,14 @@ mod tests {
         );
         assert_eq!(
             LinterConfig {
+                flavor: Some("pandoc".to_string()),
+                ..Default::default()
+            }
+            .markdown_flavor(),
+            MarkdownFlavor::Pandoc
+        );
+        assert_eq!(
+            LinterConfig {
                 flavor: Some("quarto".to_string()),
                 ..Default::default()
             }
@@ -652,6 +660,7 @@ mod tests {
             MarkdownFlavor::Standard,
             MarkdownFlavor::MkDocs,
             MarkdownFlavor::MDX,
+            MarkdownFlavor::Pandoc,
             MarkdownFlavor::Quarto,
             MarkdownFlavor::Obsidian,
             MarkdownFlavor::Kramdown,
@@ -663,6 +672,7 @@ mod tests {
                 MarkdownFlavor::Standard => "standard",
                 MarkdownFlavor::MkDocs => "mkdocs",
                 MarkdownFlavor::MDX => "mdx",
+                MarkdownFlavor::Pandoc => "pandoc",
                 MarkdownFlavor::Quarto => "quarto",
                 MarkdownFlavor::Obsidian => "obsidian",
                 MarkdownFlavor::Kramdown => "kramdown",

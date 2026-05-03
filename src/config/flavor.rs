@@ -30,6 +30,10 @@ pub enum MarkdownFlavor {
     /// MDX flavor with JSX and ESM support (.mdx files)
     #[serde(rename = "mdx")]
     MDX,
+    /// Pandoc Markdown — fenced divs, attribute lists, citations, definition
+    /// lists, math, and other Pandoc-specific syntax.
+    #[serde(rename = "pandoc")]
+    Pandoc,
     /// Quarto/RMarkdown flavor for scientific publishing (.qmd, .Rmd files)
     #[serde(rename = "quarto")]
     Quarto,
@@ -44,9 +48,9 @@ pub enum MarkdownFlavor {
 /// Custom JSON schema for MarkdownFlavor that includes all accepted values and aliases
 fn markdown_flavor_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
-        "description": "Markdown flavor/dialect. Accepts: standard, gfm, mkdocs, mdx, quarto, obsidian, kramdown. Aliases: commonmark/github map to standard, qmd/rmd/rmarkdown map to quarto, jekyll maps to kramdown.",
+        "description": "Markdown flavor/dialect. Accepts: standard, gfm, mkdocs, mdx, pandoc, quarto, obsidian, kramdown. Aliases: commonmark/github map to standard, qmd/rmd/rmarkdown map to quarto, jekyll maps to kramdown.",
         "type": "string",
-        "enum": ["standard", "gfm", "github", "commonmark", "mkdocs", "mdx", "quarto", "qmd", "rmd", "rmarkdown", "obsidian", "kramdown", "jekyll"]
+        "enum": ["standard", "gfm", "github", "commonmark", "mkdocs", "mdx", "pandoc", "quarto", "qmd", "rmd", "rmarkdown", "obsidian", "kramdown", "jekyll"]
     })
 }
 
@@ -66,6 +70,7 @@ impl fmt::Display for MarkdownFlavor {
             MarkdownFlavor::Standard => write!(f, "standard"),
             MarkdownFlavor::MkDocs => write!(f, "mkdocs"),
             MarkdownFlavor::MDX => write!(f, "mdx"),
+            MarkdownFlavor::Pandoc => write!(f, "pandoc"),
             MarkdownFlavor::Quarto => write!(f, "quarto"),
             MarkdownFlavor::Obsidian => write!(f, "obsidian"),
             MarkdownFlavor::Kramdown => write!(f, "kramdown"),
@@ -81,6 +86,7 @@ impl FromStr for MarkdownFlavor {
             "standard" | "" | "none" => Ok(MarkdownFlavor::Standard),
             "mkdocs" => Ok(MarkdownFlavor::MkDocs),
             "mdx" => Ok(MarkdownFlavor::MDX),
+            "pandoc" => Ok(MarkdownFlavor::Pandoc),
             "quarto" | "qmd" | "rmd" | "rmarkdown" => Ok(MarkdownFlavor::Quarto),
             "obsidian" => Ok(MarkdownFlavor::Obsidian),
             "kramdown" | "jekyll" => Ok(MarkdownFlavor::Kramdown),
@@ -151,6 +157,7 @@ impl MarkdownFlavor {
             Self::Standard => "Standard",
             Self::MkDocs => "MkDocs",
             Self::MDX => "MDX",
+            Self::Pandoc => "Pandoc",
             Self::Quarto => "Quarto",
             Self::Obsidian => "Obsidian",
             Self::Kramdown => "Kramdown",
@@ -192,6 +199,7 @@ mod tests {
             (MarkdownFlavor::Standard, "standard"),
             (MarkdownFlavor::MkDocs, "mkdocs"),
             (MarkdownFlavor::MDX, "mdx"),
+            (MarkdownFlavor::Pandoc, "pandoc"),
             (MarkdownFlavor::Quarto, "quarto"),
             (MarkdownFlavor::Obsidian, "obsidian"),
             (MarkdownFlavor::Kramdown, "kramdown"),
@@ -218,6 +226,7 @@ mod tests {
             MarkdownFlavor::Standard,
             MarkdownFlavor::MkDocs,
             MarkdownFlavor::MDX,
+            MarkdownFlavor::Pandoc,
             MarkdownFlavor::Quarto,
             MarkdownFlavor::Obsidian,
             MarkdownFlavor::Kramdown,
@@ -232,5 +241,24 @@ mod tests {
                 "Display(\"{displayed}\") for {variant:?} round-trips to a different variant: {parsed:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_pandoc_from_str() {
+        assert_eq!("pandoc".parse::<MarkdownFlavor>().unwrap(), MarkdownFlavor::Pandoc);
+        assert_eq!("PANDOC".parse::<MarkdownFlavor>().unwrap(), MarkdownFlavor::Pandoc);
+    }
+
+    #[test]
+    fn test_pandoc_name_and_display() {
+        assert_eq!(MarkdownFlavor::Pandoc.name(), "Pandoc");
+        assert_eq!(MarkdownFlavor::Pandoc.to_string(), "pandoc");
+    }
+
+    #[test]
+    fn test_from_extension_does_not_auto_detect_pandoc() {
+        // Pandoc files use .md — must NOT auto-detect to Pandoc.
+        assert_eq!(MarkdownFlavor::from_extension("md"), MarkdownFlavor::Standard);
+        assert_eq!(MarkdownFlavor::from_extension("markdown"), MarkdownFlavor::Standard);
     }
 }
