@@ -350,7 +350,7 @@ pub fn detect_subscript_superscript_ranges(content: &str) -> Vec<ByteRange> {
 
     for m in SUBSCRIPT_PATTERN.find_iter(content) {
         // Reject if preceded or followed by `~` (would be strikethrough).
-        let prev = m.start().checked_sub(1).map(|i| bytes[i]).unwrap_or(0);
+        let prev = m.start().checked_sub(1).map_or(0, |i| bytes[i]);
         let next = bytes.get(m.end()).copied().unwrap_or(0);
         if prev != b'~' && next != b'~' {
             ranges.push(ByteRange {
@@ -361,7 +361,7 @@ pub fn detect_subscript_superscript_ranges(content: &str) -> Vec<ByteRange> {
     }
     for m in SUPERSCRIPT_PATTERN.find_iter(content) {
         // Reject if preceded or followed by `^` (would be a `^^` run).
-        let prev = m.start().checked_sub(1).map(|i| bytes[i]).unwrap_or(0);
+        let prev = m.start().checked_sub(1).map_or(0, |i| bytes[i]);
         let next = bytes.get(m.end()).copied().unwrap_or(0);
         if prev != b'^' && next != b'^' {
             ranges.push(ByteRange {
@@ -515,6 +515,7 @@ pub fn detect_bracketed_span_ranges(content: &str) -> Vec<ByteRange> {
 ///   end with `|` (which would be a pipe-table row), or
 /// - Is a continuation line (whitespace-indented, non-empty, not starting
 ///   with `|`) appearing within an active line-block run.
+///
 /// A blank line ends the run.
 pub fn detect_line_block_ranges(content: &str) -> Vec<ByteRange> {
     let mut ranges = Vec::new();

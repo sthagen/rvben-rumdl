@@ -1728,7 +1728,7 @@ fn test_pandoc_flavor_detects_grid_table() {
 +---+---+
 ";
     let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
-    let pos = content.find("a").unwrap();
+    let pos = content.find('a').unwrap();
     assert!(ctx.is_in_grid_table(pos));
 }
 
@@ -1748,7 +1748,7 @@ fn test_standard_flavor_skips_grid_table() {
     use crate::config::MarkdownFlavor;
     let content = "+---+---+\n| a | b |\n+---+---+\n";
     let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
-    let pos = content.find("a").unwrap();
+    let pos = content.find('a').unwrap();
     assert!(!ctx.is_in_grid_table(pos));
 }
 

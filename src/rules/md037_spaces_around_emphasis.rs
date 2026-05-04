@@ -1042,7 +1042,7 @@ This has * real spaced emphasis * that should be flagged."#;
     #[test]
     fn test_pandoc_bracketed_span_guard() {
         use crate::config::MarkdownFlavor;
-        let rule = MD037NoSpaceInEmphasis::default();
+        let rule = MD037NoSpaceInEmphasis;
         // Emphasis-like pattern inside a bracketed span (Pandoc construct)
         let content = "See [* important *]{.highlight} for details.\n";
         let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
