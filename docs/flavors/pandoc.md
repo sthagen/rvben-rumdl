@@ -85,6 +85,23 @@ Refer to [My Section] for details.
 
 **Affected rules**: MD042, MD051, MD052
 
+#### Duplicate Heading Disambiguation
+
+Pandoc's `auto_identifiers` extension assigns the second heading sharing the
+same slug `<base>-1`, the third `<base>-2`, etc. MD051 resolves both forms:
+
+```markdown
+# A.
+
+first
+
+# A.
+
+second
+
+See [first](#a.) and [second](#a.-1).
+```
+
 ### Example Lists
 
 ```markdown

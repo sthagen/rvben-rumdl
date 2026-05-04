@@ -1458,4 +1458,45 @@ See [link](#nonexistent) for details."#;
             "Pandoc flavor must flag the missing fragment — `[label](url)` is a link, not a citation: {pandoc_result:?}"
         );
     }
+
+    /// Pandoc's auto_identifiers extension disambiguates duplicate headings by
+    /// appending `-1`, `-2`, etc. A link to `#a.-1` must resolve against the
+    /// second `# A.` heading.
+    #[test]
+    fn md051_pandoc_resolves_duplicate_heading_suffix_slug() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD051LinkFragments::new();
+        let content = "# A.\n\nfirst\n\n# A.\n\nsecond\n\n[first](#a.) and [second](#a.-1).\n";
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let pandoc_result = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            pandoc_result.is_empty(),
+            "Pandoc flavor should resolve `#a.` and `#a.-1` against duplicate headings: {pandoc_result:?}"
+        );
+
+        let ctx_quarto = LintContext::new(content, MarkdownFlavor::Quarto, None);
+        let quarto_result = rule.check(&ctx_quarto).unwrap();
+        assert!(
+            quarto_result.is_empty(),
+            "Quarto flavor should also resolve duplicate-heading suffix slugs: {quarto_result:?}"
+        );
+    }
+
+    /// A link to `#a.-2` with only two `# A.` headings must still be flagged —
+    /// only `-1` exists when there are two duplicates.
+    #[test]
+    fn md051_pandoc_flags_overshoot_duplicate_suffix() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD051LinkFragments::new();
+        let content = "# A.\n\n# A.\n\n[overshoot](#a.-2)\n";
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let pandoc_result = rule.check(&ctx_pandoc).unwrap();
+        assert_eq!(
+            pandoc_result.len(),
+            1,
+            "Pandoc must flag `#a.-2` when only `-1` exists (two duplicates): {pandoc_result:?}"
+        );
+    }
 }

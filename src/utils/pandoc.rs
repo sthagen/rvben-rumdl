@@ -298,12 +298,18 @@ pub fn pandoc_header_slug(text: &str) -> String {
 /// a slug for each using [`pandoc_header_slug`]. The resulting set is used by
 /// the `implicit_header_references` extension detector in [`LintContext`].
 ///
+/// Pandoc's `auto_identifiers` extension disambiguates duplicate headings by
+/// appending `-1`, `-2`, etc. to the second, third, … occurrence of the same
+/// base slug. Both the base slug and its suffixed forms are inserted so that
+/// links such as `#section` and `#section-1` both resolve.
+///
 /// Lines inside fenced code blocks (delimited by ` ``` ` or `~~~`, >= 3 chars)
 /// are skipped so that bash comments and shebang lines are not mistaken for
 /// headings.
 pub fn collect_pandoc_header_slugs(content: &str) -> std::collections::HashSet<String> {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     let mut slugs = HashSet::new();
+    let mut base_counts: HashMap<String, usize> = HashMap::new();
     let mut in_fence = false;
     let mut fence_marker: Option<char> = None;
     for line in content.lines() {
@@ -345,7 +351,15 @@ pub fn collect_pandoc_header_slugs(content: &str) -> std::collections::HashSet<S
             {
                 text = &text[..idx];
             }
-            slugs.insert(pandoc_header_slug(text));
+            let base = pandoc_header_slug(text);
+            let count = base_counts.entry(base.clone()).or_insert(0);
+            let slug = if *count == 0 {
+                base.clone()
+            } else {
+                format!("{base}-{count}")
+            };
+            *count += 1;
+            slugs.insert(slug);
         }
     }
     slugs
@@ -1375,6 +1389,46 @@ Warning content here.
         let content = "# Some {curly} word in title\n";
         let slugs = collect_pandoc_header_slugs(content);
         assert!(slugs.contains("some-curly-word-in-title"));
+    }
+
+    #[test]
+    fn test_collect_pandoc_header_slugs_disambiguates_duplicates() {
+        // Pandoc's auto_identifiers extension assigns the second heading with the
+        // same slug `<base>-1`, the third `<base>-2`, etc. Both base and suffixed
+        // forms must be reachable as link targets.
+        let content = "# A.\n\nbody\n\n# A.\n";
+        let slugs = collect_pandoc_header_slugs(content);
+        assert!(slugs.contains("a."), "first occurrence should expose base slug `a.`");
+        assert!(
+            slugs.contains("a.-1"),
+            "second occurrence should expose `a.-1`: got {slugs:?}"
+        );
+    }
+
+    #[test]
+    fn test_collect_pandoc_header_slugs_three_duplicates_get_two_suffixes() {
+        let content = "# Intro\n\n# Intro\n\n# Intro\n";
+        let slugs = collect_pandoc_header_slugs(content);
+        assert!(slugs.contains("intro"));
+        assert!(slugs.contains("intro-1"));
+        assert!(slugs.contains("intro-2"));
+        assert!(
+            !slugs.contains("intro-3"),
+            "three occurrences must produce only -1 and -2 suffixes, not -3: got {slugs:?}"
+        );
+    }
+
+    #[test]
+    fn test_collect_pandoc_header_slugs_unique_headings_get_no_suffix() {
+        let content = "# Foo\n\n# Bar\n\n# Baz\n";
+        let slugs = collect_pandoc_header_slugs(content);
+        assert!(slugs.contains("foo"));
+        assert!(slugs.contains("bar"));
+        assert!(slugs.contains("baz"));
+        // Unique headings must not gain a `-1` suffix.
+        assert!(!slugs.contains("foo-1"));
+        assert!(!slugs.contains("bar-1"));
+        assert!(!slugs.contains("baz-1"));
     }
 
     #[test]
