@@ -1633,3 +1633,57 @@ fn test_pandoc_flavor_line_block_continuation_is_in_block() {
     let pos = content.find("continuation").unwrap();
     assert!(ctx.is_in_line_block(pos));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_pipe_table_caption_below() {
+    use crate::config::MarkdownFlavor;
+    let content = "\
+| col1 | col2 |
+|------|------|
+| a    | b    |
+
+: My caption
+";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("My caption").unwrap();
+    assert!(ctx.is_in_pipe_table_caption(pos));
+}
+
+#[test]
+fn test_pandoc_flavor_definition_term_is_not_pipe_table_caption() {
+    use crate::config::MarkdownFlavor;
+    let content = "Term\n: definition\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("definition").unwrap();
+    assert!(!ctx.is_in_pipe_table_caption(pos));
+}
+
+#[test]
+fn test_standard_flavor_skips_pipe_table_caption() {
+    use crate::config::MarkdownFlavor;
+    let content = "\
+| col1 |
+|------|
+| a    |
+
+: Caption
+";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("Caption").unwrap();
+    assert!(!ctx.is_in_pipe_table_caption(pos));
+}
+
+#[test]
+fn test_pandoc_flavor_detects_pipe_table_caption_above() {
+    use crate::config::MarkdownFlavor;
+    let content = "\
+: Caption first
+
+| col1 | col2 |
+|------|------|
+| a    | b    |
+";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("Caption first").unwrap();
+    assert!(ctx.is_in_pipe_table_caption(pos));
+}

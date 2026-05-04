@@ -544,6 +544,68 @@ pub fn detect_line_block_ranges(content: &str) -> Vec<ByteRange> {
     ranges
 }
 
+// ============================================================================
+// Pipe-Table Caption Support
+// ============================================================================
+//
+// Pandoc `table_captions` extension: a `: caption text` line that appears
+// adjacent to a pipe table, separated by exactly one blank line (either
+// above or below). Without the blank-line adjacency to a pipe table, a
+// `: text` line is a definition-list value and must NOT be matched here.
+//
+// Matching rule:
+//   caption_below: caption at line i, blank at i+1, pipe-table row at i+2
+//   caption_above: pipe-table row at i-2, blank at i-1, caption at i
+
+/// Detect Pandoc pipe-table caption lines (`: caption`) adjacent (above or
+/// below, separated by exactly one blank line) to a pipe table. A `: text`
+/// line not adjacent to a table is treated as a definition-list value and
+/// is not matched here.
+///
+/// Iterates with `split_inclusive('\n')` so byte ranges remain accurate for
+/// content without a trailing newline and for CRLF line endings.
+pub fn detect_pipe_table_caption_ranges(content: &str) -> Vec<ByteRange> {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut line_offsets: Vec<usize> = Vec::new();
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        line_offsets.push(offset);
+        lines.push(line);
+        offset += line.len();
+    }
+    line_offsets.push(offset);
+
+    fn line_body(line: &str) -> &str {
+        line.trim_end_matches('\n').trim_end_matches('\r')
+    }
+    fn is_pipe_table_row(line: &str) -> bool {
+        let t = line_body(line).trim();
+        t.starts_with('|') && t.ends_with('|') && t.len() >= 3
+    }
+    fn is_caption_line(line: &str) -> bool {
+        line_body(line).trim_start().starts_with(": ")
+    }
+    fn is_blank(line: &str) -> bool {
+        line_body(line).trim().is_empty()
+    }
+
+    let mut ranges = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if !is_caption_line(line) {
+            continue;
+        }
+        let table_below = i + 2 < lines.len() && is_blank(lines[i + 1]) && is_pipe_table_row(lines[i + 2]);
+        let table_above = i >= 2 && is_blank(lines[i - 1]) && is_pipe_table_row(lines[i - 2]);
+        if table_below || table_above {
+            ranges.push(ByteRange {
+                start: line_offsets[i],
+                end: line_offsets[i + 1],
+            });
+        }
+    }
+    ranges
+}
+
 /// Detect Pandoc inline footnote ranges (`^[note text]`).
 ///
 /// Returns byte ranges covering the entire `^[...]` span. Intended for rules that
@@ -1123,6 +1185,110 @@ Warning content here.
         // A `| col |...| row` line ending with `|` is a pipe-table row, not a line block.
         let content = "| col1 | col2 |\n|------|------|\n";
         let ranges = detect_line_block_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_detect_pipe_table_caption_below() {
+        let content = "\
+| col1 | col2 |
+|------|------|
+| a    | b    |
+
+: My caption
+";
+        let ranges = detect_pipe_table_caption_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let cap = &content[ranges[0].start..ranges[0].end];
+        assert!(cap.starts_with(": My caption"));
+    }
+
+    #[test]
+    fn test_detect_pipe_table_caption_above() {
+        let content = "\
+: Caption first
+
+| col1 | col2 |
+|------|------|
+| a    | b    |
+";
+        let ranges = detect_pipe_table_caption_ranges(content);
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[test]
+    fn test_colon_line_without_adjacent_table_is_definition_term() {
+        // A `: text` line not adjacent to a table is part of a definition list.
+        let content = "Term\n: definition\n";
+        let ranges = detect_pipe_table_caption_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_pipe_table_caption_two_blank_lines_does_not_match() {
+        // Pandoc requires exactly one blank line between table and caption.
+        let content = "\
+| a | b |
+|---|---|
+| 1 | 2 |
+
+
+: Caption
+";
+        let ranges = detect_pipe_table_caption_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_pipe_table_caption_no_blank_line_does_not_match() {
+        // Adjacent without a blank line is not a caption either.
+        let content = "\
+| a | b |
+|---|---|
+| 1 | 2 |
+: Caption
+";
+        let ranges = detect_pipe_table_caption_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_pipe_table_caption_no_trailing_newline() {
+        // Caption is the final line of the document with no newline; the
+        // computed end must equal the content length, not overshoot.
+        let content = "\
+| a | b |
+|---|---|
+| 1 | 2 |
+
+: Trailing caption";
+        let ranges = detect_pipe_table_caption_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].end, content.len());
+        assert_eq!(&content[ranges[0].start..ranges[0].end], ": Trailing caption");
+    }
+
+    #[test]
+    fn test_pipe_table_caption_handles_crlf() {
+        // CRLF line endings must produce correct byte offsets too.
+        let content = "| a | b |\r\n|---|---|\r\n| 1 | 2 |\r\n\r\n: CRLF caption\r\n";
+        let ranges = detect_pipe_table_caption_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let cap = &content[ranges[0].start..ranges[0].end];
+        assert!(cap.starts_with(": CRLF caption"));
+    }
+
+    #[test]
+    fn test_pipe_table_caption_lone_colon_does_not_match() {
+        // Pandoc requires `: ` (colon-space) for a caption; bare `:` is not.
+        let content = "\
+| a | b |
+|---|---|
+| 1 | 2 |
+
+:
+";
+        let ranges = detect_pipe_table_caption_ranges(content);
         assert_eq!(ranges.len(), 0);
     }
 
