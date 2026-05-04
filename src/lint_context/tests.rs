@@ -1687,3 +1687,32 @@ fn test_pandoc_flavor_detects_pipe_table_caption_above() {
     let pos = content.find("Caption first").unwrap();
     assert!(ctx.is_in_pipe_table_caption(pos));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_metadata_block_at_start() {
+    use crate::config::MarkdownFlavor;
+    let content = "---\ntitle: Doc\n---\n\nBody.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("title").unwrap();
+    assert!(ctx.is_in_pandoc_metadata(pos));
+    let body_pos = content.find("Body").unwrap();
+    assert!(!ctx.is_in_pandoc_metadata(body_pos));
+}
+
+#[test]
+fn test_pandoc_flavor_detects_mid_document_metadata() {
+    use crate::config::MarkdownFlavor;
+    let content = "Intro.\n\n---\nauthor: X\n---\n\nBody.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("author").unwrap();
+    assert!(ctx.is_in_pandoc_metadata(pos));
+}
+
+#[test]
+fn test_standard_flavor_skips_pandoc_metadata() {
+    use crate::config::MarkdownFlavor;
+    let content = "---\ntitle: Doc\n---\n\nBody.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("title").unwrap();
+    assert!(!ctx.is_in_pandoc_metadata(pos));
+}

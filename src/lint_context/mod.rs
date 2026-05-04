@@ -96,6 +96,7 @@ pub struct LintContext<'a> {
     bracketed_span_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc bracketed span ranges ([text]{attrs})
     line_block_ranges: Vec<crate::utils::skip_context::ByteRange>,     // Pre-computed Pandoc line block ranges (| text)
     pipe_table_caption_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc pipe-table caption ranges (: caption)
+    pandoc_metadata_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc YAML metadata block ranges (--- ... --- or ...)
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -677,6 +678,15 @@ impl<'a> LintContext<'a> {
             }
         });
 
+        // Pre-compute Pandoc YAML metadata block ranges (--- ... --- or ...) for Pandoc-compatible flavors
+        let pandoc_metadata_ranges = profile_section!("Pandoc metadata ranges", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::detect_yaml_metadata_block_ranges(content)
+            } else {
+                Vec::new()
+            }
+        });
+
         // Pre-compute Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
         let shortcode_ranges = profile_section!("Shortcode ranges", profile, {
             use crate::utils::regex_cache::HUGO_SHORTCODE_REGEX;
@@ -733,6 +743,7 @@ impl<'a> LintContext<'a> {
             bracketed_span_ranges,
             line_block_ranges,
             pipe_table_caption_ranges,
+            pandoc_metadata_ranges,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1209,6 +1220,14 @@ impl<'a> LintContext<'a> {
     pub fn is_in_pipe_table_caption(&self, byte_pos: usize) -> bool {
         let idx = self.pipe_table_caption_ranges.partition_point(|r| r.start <= byte_pos);
         idx > 0 && byte_pos < self.pipe_table_caption_ranges[idx - 1].end
+    }
+
+    /// Returns true if `byte_pos` falls inside a Pandoc YAML metadata block.
+    /// Active for Pandoc-compatible flavors. O(log n).
+    #[inline]
+    pub fn is_in_pandoc_metadata(&self, byte_pos: usize) -> bool {
+        let idx = self.pandoc_metadata_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.pandoc_metadata_ranges[idx - 1].end
     }
 
     /// Returns true if `link_text` slugifies to a heading present in the document.

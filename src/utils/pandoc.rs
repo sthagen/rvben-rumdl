@@ -606,6 +606,77 @@ pub fn detect_pipe_table_caption_ranges(content: &str) -> Vec<ByteRange> {
     ranges
 }
 
+// ============================================================================
+// YAML Metadata Block Support
+// ============================================================================
+//
+// Pandoc `yaml_metadata_block` extension: one or more `---`-delimited YAML
+// blocks anywhere in the document. Unlike standard frontmatter (single block
+// at file start), Pandoc allows:
+//   - Multiple blocks per document
+//   - `---` opener
+//   - Either `---` or `...` as the closer
+//   - Opener must be at start-of-file OR immediately after a blank line
+//   - Unterminated openers are skipped
+
+/// Detect Pandoc YAML metadata blocks (`---...---` or `---...`).
+/// Unlike standard frontmatter, these can appear anywhere in the document
+/// and there can be multiple per file.
+pub fn detect_yaml_metadata_block_ranges(content: &str) -> Vec<ByteRange> {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut line_offsets: Vec<usize> = Vec::new();
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        line_offsets.push(offset);
+        lines.push(line);
+        offset += line.len();
+    }
+    line_offsets.push(offset);
+
+    fn line_body(line: &str) -> &str {
+        line.trim_end_matches('\n').trim_end_matches('\r')
+    }
+    fn is_blank(line: &str) -> bool {
+        line_body(line).trim().is_empty()
+    }
+    fn is_opener(line: &str) -> bool {
+        line_body(line).trim_end() == "---"
+    }
+    fn is_closer(line: &str) -> bool {
+        let t = line_body(line).trim_end();
+        t == "---" || t == "..."
+    }
+
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let preceded_by_blank = i == 0 || is_blank(lines[i - 1]);
+        if preceded_by_blank && is_opener(lines[i]) {
+            let mut j = i + 1;
+            let mut found_closer = false;
+            while j < lines.len() {
+                if is_closer(lines[j]) {
+                    ranges.push(ByteRange {
+                        start: line_offsets[i],
+                        end: line_offsets[j + 1],
+                    });
+                    i = j + 1;
+                    found_closer = true;
+                    break;
+                }
+                j += 1;
+            }
+            if !found_closer {
+                // Unterminated opener — skip and continue scanning.
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    ranges
+}
+
 /// Detect Pandoc inline footnote ranges (`^[note text]`).
 ///
 /// Returns byte ranges covering the entire `^[...]` span. Intended for rules that
@@ -1290,6 +1361,70 @@ Warning content here.
 ";
         let ranges = detect_pipe_table_caption_ranges(content);
         assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_detect_metadata_block_at_start() {
+        // Standard frontmatter case — should be returned as a metadata range.
+        let content = "---\ntitle: Doc\n---\n\nBody.\n";
+        let ranges = detect_yaml_metadata_block_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+    }
+
+    #[test]
+    fn test_detect_metadata_block_mid_document() {
+        // Pandoc allows multiple `---...---` metadata blocks anywhere.
+        let content = "---\ntitle: Doc\n---\n\n# Heading\n\n---\nauthor: X\n---\n\nBody.\n";
+        let ranges = detect_yaml_metadata_block_ranges(content);
+        assert_eq!(ranges.len(), 2);
+    }
+
+    #[test]
+    fn test_metadata_block_uses_dot_terminator() {
+        // Pandoc accepts `...` as an alternative terminator.
+        let content = "---\ntitle: Doc\n...\n\nBody.\n";
+        let ranges = detect_yaml_metadata_block_ranges(content);
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[test]
+    fn test_metadata_block_unterminated_opener_skipped() {
+        // An opener with no closer reaching EOF must NOT produce a range.
+        let content = "---\ntitle: Doc\nbody continues forever\n";
+        let ranges = detect_yaml_metadata_block_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_metadata_block_dashes_after_text_are_not_opener() {
+        // A `---` line not preceded by a blank is a horizontal rule,
+        // not a metadata opener.
+        let content = "Some prose paragraph.\n---\nbody: not-metadata\n---\n";
+        let ranges = detect_yaml_metadata_block_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_metadata_block_no_trailing_newline() {
+        // Block at end of file with no trailing newline; end must equal
+        // content length, not overshoot.
+        let content = "---\ntitle: Doc\n---";
+        let ranges = detect_yaml_metadata_block_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_metadata_block_handles_crlf() {
+        // CRLF endings must produce correct byte offsets.
+        let content = "---\r\ntitle: Doc\r\n---\r\n\r\nBody.\r\n";
+        let ranges = detect_yaml_metadata_block_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let block = &content[ranges[0].start..ranges[0].end];
+        assert!(block.starts_with("---\r\n"));
+        assert!(block.ends_with("---\r\n"));
     }
 
     #[test]
