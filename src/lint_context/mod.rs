@@ -89,6 +89,8 @@ pub struct LintContext<'a> {
     pandoc_div_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto div block ranges (::: ... :::)
     inline_footnote_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc inline footnote ranges (^[...])
     pandoc_header_slugs: std::collections::HashSet<String>, // Pre-computed Pandoc implicit header reference slugs
+    example_list_marker_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc example-list marker ranges (@) / (@label)
+    example_reference_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc example reference ranges (@label) inline
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -607,6 +609,24 @@ impl<'a> LintContext<'a> {
             }
         });
 
+        // Pre-compute Pandoc example-list marker ranges for Pandoc-compatible flavors
+        let example_list_marker_ranges = profile_section!("Example list markers", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::detect_example_list_marker_ranges(content)
+            } else {
+                Vec::new()
+            }
+        });
+
+        // Pre-compute Pandoc example reference ranges for Pandoc-compatible flavors
+        let example_reference_ranges = profile_section!("Example references", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::detect_example_reference_ranges(content, &example_list_marker_ranges)
+            } else {
+                Vec::new()
+            }
+        });
+
         // Pre-compute Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
         let shortcode_ranges = profile_section!("Shortcode ranges", profile, {
             use crate::utils::regex_cache::HUGO_SHORTCODE_REGEX;
@@ -656,6 +676,8 @@ impl<'a> LintContext<'a> {
             pandoc_div_ranges,
             inline_footnote_ranges,
             pandoc_header_slugs,
+            example_list_marker_ranges,
+            example_reference_ranges,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1074,6 +1096,22 @@ impl<'a> LintContext<'a> {
     pub fn is_in_inline_footnote(&self, byte_pos: usize) -> bool {
         let idx = self.inline_footnote_ranges.partition_point(|r| r.start <= byte_pos);
         idx > 0 && byte_pos < self.inline_footnote_ranges[idx - 1].end
+    }
+
+    /// Check if a byte position is within a Pandoc example-list marker (`(@)` /
+    /// `(@label)` at line start). Active for Pandoc-compatible flavors. O(log n).
+    #[inline]
+    pub fn is_in_example_list_marker(&self, byte_pos: usize) -> bool {
+        let idx = self.example_list_marker_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.example_list_marker_ranges[idx - 1].end
+    }
+
+    /// Check if a byte position is within a Pandoc example reference (`(@label)`
+    /// inline). Active for Pandoc-compatible flavors. O(log n).
+    #[inline]
+    pub fn is_in_example_reference(&self, byte_pos: usize) -> bool {
+        let idx = self.example_reference_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.example_reference_ranges[idx - 1].end
     }
 
     /// Returns true if `link_text` slugifies to a heading present in the document.

@@ -306,6 +306,64 @@ pub fn collect_pandoc_header_slugs(content: &str) -> std::collections::HashSet<S
     slugs
 }
 
+// ============================================================================
+// Example List Support
+// ============================================================================
+//
+// Pandoc `example_lists` extension:
+// - Line-start marker: `(@)` or `(@label)` followed by whitespace
+// - Inline reference: `(@label)` appearing mid-paragraph (not at line start)
+//
+// Example keys contain letters, digits, underscores, and hyphens.
+// The anonymous form `(@)` is valid as a marker but cannot appear as a reference
+// (references require a label to be named).
+
+/// Pattern for an example-list marker at line start: `(@)` or `(@label)` followed
+/// by whitespace. Captures the `(@...)` portion.
+static EXAMPLE_LIST_MARKER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^[ \t]*(\(@[A-Za-z0-9_-]*\))[ \t]+").unwrap());
+
+/// Pattern for an example reference: `(@label)` anywhere in text. Used together
+/// with the marker pre-pass to filter out line-start markers.
+static EXAMPLE_REFERENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\(@[A-Za-z0-9_-]+\))").unwrap());
+
+/// Detect Pandoc example-list marker ranges (`(@)` / `(@label)` at line start).
+///
+/// Returns byte ranges covering the `(@...)` portion of each marker. Used by
+/// rules that process list markers to skip Pandoc example markers.
+pub fn detect_example_list_marker_ranges(content: &str) -> Vec<ByteRange> {
+    let mut ranges = Vec::new();
+    for caps in EXAMPLE_LIST_MARKER.captures_iter(content) {
+        let m = caps.get(1).unwrap();
+        ranges.push(ByteRange {
+            start: m.start(),
+            end: m.end(),
+        });
+    }
+    ranges
+}
+
+/// Detect Pandoc example reference ranges (`(@label)` not at line start).
+///
+/// Excludes positions whose start byte appears in `marker_ranges` (those are
+/// line-start markers, not references). The caller must pass the already-computed
+/// result of [`detect_example_list_marker_ranges`] so the marker regex is not
+/// executed a second time.
+pub fn detect_example_reference_ranges(content: &str, marker_ranges: &[ByteRange]) -> Vec<ByteRange> {
+    let mut ranges = Vec::new();
+    let marker_starts: std::collections::HashSet<usize> = marker_ranges.iter().map(|r| r.start).collect();
+    for caps in EXAMPLE_REFERENCE.captures_iter(content) {
+        let m = caps.get(1).unwrap();
+        if !marker_starts.contains(&m.start()) {
+            ranges.push(ByteRange {
+                start: m.start(),
+                end: m.end(),
+            });
+        }
+    }
+    ranges
+}
+
 /// Detect Pandoc inline footnote ranges (`^[note text]`).
 ///
 /// Returns byte ranges covering the entire `^[...]` span. Intended for rules that
@@ -668,6 +726,34 @@ Warning content here.
         let content = "# Some {curly} word in title\n";
         let slugs = collect_pandoc_header_slugs(content);
         assert!(slugs.contains("some-curly-word-in-title"));
+    }
+
+    #[test]
+    fn test_detect_example_list_markers() {
+        let content = "(@)  First item.\n(@good) Second item.\n(@) Third item.\n";
+        let ranges = detect_example_list_marker_ranges(content);
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(&content[ranges[0].start..ranges[0].end], "(@)");
+        let second_start = content.find("(@good)").unwrap();
+        assert_eq!(ranges[1].start, second_start);
+        assert_eq!(&content[ranges[1].start..ranges[1].end], "(@good)");
+    }
+
+    #[test]
+    fn test_detect_example_references() {
+        // `(@label)` mid-paragraph is a reference, not a list marker.
+        let content = "As shown in (@good), this works.\n";
+        let marker_ranges = detect_example_list_marker_ranges(content);
+        let ranges = detect_example_reference_ranges(content, &marker_ranges);
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[test]
+    fn test_example_marker_must_be_at_line_start() {
+        let content = "Inline (@) is not a marker.\n";
+        let ranges = detect_example_list_marker_ranges(content);
+        assert_eq!(ranges.len(), 0);
     }
 
     #[test]

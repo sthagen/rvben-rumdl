@@ -1470,3 +1470,37 @@ fn test_standard_flavor_does_not_resolve_implicit_header_reference() {
     let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
     assert!(!ctx.matches_implicit_header_reference("My Section"));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_example_list_markers() {
+    use crate::config::MarkdownFlavor;
+    let content = "(@) First item.\n(@good) Second item.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("(@)").unwrap();
+    assert!(ctx.is_in_example_list_marker(pos));
+    let pos2 = content.find("(@good)").unwrap();
+    assert!(ctx.is_in_example_list_marker(pos2));
+}
+
+#[test]
+fn test_pandoc_flavor_detects_example_references() {
+    use crate::config::MarkdownFlavor;
+    let content = "(@good) First.\n\nAs shown in (@good), it works.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let ref_pos = content.rfind("(@good)").unwrap();
+    assert!(ctx.is_in_example_reference(ref_pos));
+    // The line-start marker is NOT a reference (filtered out).
+    let marker_pos = content.find("(@good)").unwrap();
+    assert!(!ctx.is_in_example_reference(marker_pos));
+}
+
+#[test]
+fn test_standard_flavor_skips_example_lists() {
+    use crate::config::MarkdownFlavor;
+    let content = "(@) First.\nAs shown in (@good), it works.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("(@)").unwrap();
+    assert!(!ctx.is_in_example_list_marker(pos));
+    let ref_pos = content.find("(@good)").unwrap();
+    assert!(!ctx.is_in_example_reference(ref_pos));
+}
