@@ -151,6 +151,13 @@ impl MarkdownFlavor {
         matches!(self, Self::MkDocs)
     }
 
+    /// True for any flavor that includes Pandoc-style syntax — fenced divs,
+    /// attribute lists, citations, definition lists, math, raw blocks.
+    /// Use this to gate behavior shared by both Pandoc and Quarto users.
+    pub fn is_pandoc_compatible(self) -> bool {
+        matches!(self, Self::Pandoc | Self::Quarto)
+    }
+
     /// Get a human-readable name for this flavor
     pub fn name(self) -> &'static str {
         match self {
@@ -260,5 +267,17 @@ mod tests {
         // Pandoc files use .md — must NOT auto-detect to Pandoc.
         assert_eq!(MarkdownFlavor::from_extension("md"), MarkdownFlavor::Standard);
         assert_eq!(MarkdownFlavor::from_extension("markdown"), MarkdownFlavor::Standard);
+    }
+
+    #[test]
+    fn test_is_pandoc_compatible() {
+        assert!(MarkdownFlavor::Pandoc.is_pandoc_compatible());
+        assert!(MarkdownFlavor::Quarto.is_pandoc_compatible());
+
+        assert!(!MarkdownFlavor::Standard.is_pandoc_compatible());
+        assert!(!MarkdownFlavor::MkDocs.is_pandoc_compatible());
+        assert!(!MarkdownFlavor::MDX.is_pandoc_compatible());
+        assert!(!MarkdownFlavor::Obsidian.is_pandoc_compatible());
+        assert!(!MarkdownFlavor::Kramdown.is_pandoc_compatible());
     }
 }
