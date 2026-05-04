@@ -1406,4 +1406,30 @@ See [link](#nonexistent) for details."#;
             "Pandoc flavor should resolve `#5.-five-things` against the heading slug: {pandoc_result:?}"
         );
     }
+
+    /// A link whose text contains an email address must still be checked under
+    /// Pandoc — the `@` embedded in a word is not a citation marker, so the
+    /// citation guard must not silence MD051 on a missing fragment.
+    #[test]
+    fn md051_pandoc_flags_missing_fragment_with_email_in_link_text() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD051LinkFragments::new();
+        let content = "# Title\n\n[contact user@example.com](#missing)\n";
+
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let std_result = rule.check(&ctx_std).unwrap();
+        assert_eq!(
+            std_result.len(),
+            1,
+            "Standard flavor must flag the missing fragment: {std_result:?}"
+        );
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let pandoc_result = rule.check(&ctx_pandoc).unwrap();
+        assert_eq!(
+            pandoc_result.len(),
+            1,
+            "Pandoc flavor must also flag the missing fragment — link text with embedded email is not a citation: {pandoc_result:?}"
+        );
+    }
 }

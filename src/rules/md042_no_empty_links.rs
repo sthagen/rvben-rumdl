@@ -1059,4 +1059,28 @@ UnboundLocalError: cannot access local variable 'calls' where it is not associat
             "MD042 must flag [text]() under Standard flavor: {result_std:?}"
         );
     }
+
+    /// An empty link whose text contains an email address must still be flagged
+    /// under Pandoc — `@` embedded in a word is not a citation marker, so the
+    /// citation guard must not silence MD042 on this construct.
+    #[test]
+    fn test_pandoc_mode_flags_empty_link_with_email_in_text() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD042NoEmptyLinks::new();
+        let content = "[contact user@example.com]()\n";
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result_pandoc = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            !result_pandoc.is_empty(),
+            "MD042 must flag empty link with email in text under Pandoc: {result_pandoc:?}"
+        );
+
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            !result_std.is_empty(),
+            "MD042 must flag the same empty link under Standard: {result_std:?}"
+        );
+    }
 }

@@ -192,9 +192,13 @@ pub fn is_within_div_block_ranges(ranges: &[ByteRange], position: usize) -> bool
 // alphanumerics, underscores, hyphens, periods, and colons.
 
 /// Pattern to match bracketed citations: [@key], [-@key], [see @key], [@a; @b]
+///
+/// The `@` must sit at a citation boundary: immediately after `[`, or after a
+/// non-word character such as whitespace, `-`, `;`, or `,`. This excludes
+/// word-embedded `@` (e.g. emails or handles in link text like
+/// `[contact user@example.com](url)`), which are not citations.
 static BRACKETED_CITATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    // Matches [...] containing at least one @key
-    Regex::new(r"\[[^\]]*@[a-zA-Z0-9_][a-zA-Z0-9_:.#$%&\-+?<>~/]*[^\]]*\]").unwrap()
+    Regex::new(r"\[(?:[^\]@]*[^A-Za-z0-9_])?@[a-zA-Z0-9_][a-zA-Z0-9_:.#$%&\-+?<>~/]*[^\]]*\]").unwrap()
 });
 
 /// Pattern to match inline citations: @key (not inside brackets)
@@ -1161,6 +1165,31 @@ Warning content here.
                     let s = &content[r.start..r.end];
                     s.contains("example.com")
                 })
+        );
+    }
+
+    /// Bracketed link text containing an email (`@` embedded in a word) must
+    /// NOT be classified as a Pandoc citation. A citation `@key` requires the
+    /// `@` to sit at a citation boundary — start of bracket, after `-`, after
+    /// whitespace, or after `;` — never in the middle of a word like an email.
+    #[test]
+    fn test_bracketed_link_text_with_email_not_citation() {
+        let content = "[contact user@example.com](#missing)";
+        let ranges = find_citation_ranges(content);
+        assert!(
+            ranges.is_empty(),
+            "Bracketed link text with embedded email must not be detected as a Pandoc citation: {ranges:?}"
+        );
+    }
+
+    /// Same bracketed text with an empty link target — also a link, not a citation.
+    #[test]
+    fn test_bracketed_link_text_with_email_empty_href_not_citation() {
+        let content = "[contact user@example.com]()";
+        let ranges = find_citation_ranges(content);
+        assert!(
+            ranges.is_empty(),
+            "Bracketed link text with embedded email and empty href must not be a Pandoc citation: {ranges:?}"
         );
     }
 
