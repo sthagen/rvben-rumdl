@@ -701,6 +701,13 @@ impl MD052ReferenceLinkImages {
                             continue;
                         }
 
+                        // Pandoc-flavor implicit header references: `[Section name]` resolves
+                        // to a heading whose Pandoc slug matches the bracketed text. These are
+                        // not undefined references — Pandoc renders them as anchor links.
+                        if ctx.flavor.is_pandoc_compatible() && ctx.matches_implicit_header_reference(reference) {
+                            continue;
+                        }
+
                         if !references.contains(&reference_lower) && !reported_refs.contains_key(&reference_lower) {
                             let full_match = cap.get(0).unwrap();
                             let col = full_match.start();
@@ -1766,6 +1773,40 @@ See [other docs][MissingRef] for more.
         assert!(
             result.is_empty(),
             "MD052 should skip Pandoc citations under Pandoc flavor: {result:?}"
+        );
+    }
+
+    #[test]
+    fn md052_pandoc_skips_implicit_header_refs_with_shortcut_syntax() {
+        // Implicit header references (`[Section name]` resolving to a heading
+        // whose Pandoc slug matches the bracketed text) only flow through
+        // MD052's shortcut-syntax regex path — pulldown-cmark drops them as
+        // broken links before they reach `ctx.links`. Enabling
+        // `shortcut_syntax = true` exercises the SHORTCUT_REF_REGEX scan where
+        // the Pandoc implicit-header-ref guard lives.
+        use crate::config::MarkdownFlavor;
+        let rule = MD052ReferenceLinkImages::from_config_struct(MD052Config {
+            shortcut_syntax: true,
+            ..Default::default()
+        });
+        let content = "# My Section\n\nSee [My Section] for details.\n";
+
+        // Under Standard flavor (no implicit-header-ref resolution), shortcut
+        // checking flags the bracketed text as undefined.
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let std_result = rule.check(&ctx_std).unwrap();
+        assert_eq!(
+            std_result.len(),
+            1,
+            "Standard flavor with shortcut_syntax should flag [My Section]: {std_result:?}"
+        );
+
+        // Under Pandoc flavor, the implicit-header-ref guard resolves it.
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let pandoc_result = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            pandoc_result.is_empty(),
+            "Pandoc flavor should accept [My Section] as an implicit header ref: {pandoc_result:?}"
         );
     }
 }

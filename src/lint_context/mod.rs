@@ -1268,11 +1268,23 @@ impl<'a> LintContext<'a> {
         idx > 0 && byte_pos < self.multi_line_table_ranges[idx - 1].end
     }
 
-    /// Returns true if `link_text` slugifies to a heading present in the document.
-    /// Active only for Pandoc-compatible flavors.
+    /// Returns true if `link_text`, after Pandoc slugification, matches a heading
+    /// in the document. Returns false for non-Pandoc-compatible flavors because
+    /// the `pandoc_header_slugs` set is empty when the pre-pass detector is gated
+    /// off. Use this when the caller has raw bracketed text (`[Section name]`).
     pub fn matches_implicit_header_reference(&self, link_text: &str) -> bool {
         let slug = crate::utils::pandoc::pandoc_header_slug(link_text);
         self.pandoc_header_slugs.contains(&slug)
+    }
+
+    /// Returns true if `slug` (already in Pandoc-slug form) matches a heading
+    /// in the document. Returns false for non-Pandoc-compatible flavors because
+    /// the `pandoc_header_slugs` set is empty when the pre-pass detector is gated
+    /// off. Use this when the caller already has a slug (e.g. the fragment of a
+    /// URL after `#`). O(1).
+    #[inline]
+    pub fn has_pandoc_slug(&self, slug: &str) -> bool {
+        self.pandoc_header_slugs.contains(slug)
     }
 
     /// Check if a byte position is within a Hugo/Quarto shortcode ({{< ... >}} or {{% ... %}}). O(log n).

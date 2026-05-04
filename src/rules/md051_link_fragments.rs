@@ -694,6 +694,18 @@ impl Rule for MD051LinkFragments {
                 continue;
             }
 
+            // Resolve link fragments against Pandoc heading slugs. Pandoc/Quarto
+            // auto-generate slugs that diverge from GitHub style for headings that
+            // contain punctuation (e.g. `# 5. Five Things` becomes `5.-five-things`
+            // under Pandoc but `5-five-things` under GitHub). Treat such fragments
+            // as resolved when running under a Pandoc-compatible flavor.
+            if ctx.flavor.is_pandoc_compatible()
+                && let Some(frag) = url.strip_prefix('#')
+                && ctx.has_pandoc_slug(frag)
+            {
+                continue;
+            }
+
             // Skip Quarto/RMarkdown cross-references (@fig-, @tbl-, @sec-, @eq-, etc.)
             // These are special cross-reference syntax, not HTML anchors
             // Format: @prefix-identifier or just @identifier
@@ -1361,6 +1373,37 @@ See [link](#nonexistent) for details."#;
         assert!(
             result.is_empty(),
             "MD051 should skip Pandoc citations under Pandoc flavor: {result:?}"
+        );
+    }
+
+    #[test]
+    fn md051_pandoc_resolves_pandoc_slug_diverging_from_github() {
+        // The Pandoc heading slug for `# 5. Five Things` is `5.-five-things` (the
+        // dot is preserved per Pandoc's rule of keeping `.`/`_`/`-`), whereas the
+        // GitHub anchor for the same heading is `5-five-things` (the dot is
+        // stripped). A link to `#5.-five-things` would be flagged under the
+        // GitHub default but must be accepted under Pandoc-compatible flavors via
+        // the `has_pandoc_slug` short-circuit.
+        use crate::config::MarkdownFlavor;
+        let rule = MD051LinkFragments::new();
+        let content = "# 5. Five Things\n\nSee [details](#5.-five-things).\n";
+
+        // Sanity check: under Standard flavor (GitHub anchor style), the
+        // divergent fragment is reported as an unknown anchor.
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let std_result = rule.check(&ctx_std).unwrap();
+        assert_eq!(
+            std_result.len(),
+            1,
+            "Standard flavor should flag the Pandoc-style fragment: {std_result:?}"
+        );
+
+        // Under Pandoc flavor, the Pandoc slug guard should resolve it.
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let pandoc_result = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            pandoc_result.is_empty(),
+            "Pandoc flavor should resolve `#5.-five-things` against the heading slug: {pandoc_result:?}"
         );
     }
 }
