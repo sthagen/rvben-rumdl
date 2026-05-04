@@ -606,6 +606,38 @@ mod tests {
         }
     }
 
+    /// Example list markers `(@)` and `(@label)` must not be reported under
+    /// the Pandoc flavor — they are not ordered list items.
+    #[test]
+    fn test_pandoc_skips_example_list_markers() {
+        use crate::config::MarkdownFlavor;
+        use crate::lint_context::LintContext;
+        let rule = MD029OrderedListPrefix::default();
+        let content = "(@) First.\n(@good) Second.\n(@) Third.\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD029 should not flag (@)/(@label) example markers under Pandoc: {result:?}"
+        );
+    }
+
+    /// A real ordered list interleaved with example markers should validate
+    /// only the digit-prefixed items, ignoring the example markers.
+    #[test]
+    fn test_pandoc_example_markers_do_not_break_real_ordered_list() {
+        use crate::config::MarkdownFlavor;
+        use crate::lint_context::LintContext;
+        let rule = MD029OrderedListPrefix::default();
+        let content = "1. Real first.\n\n(@) Example.\n\n2. Real second.\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD029 should validate the digit-prefixed sequence and skip the example marker: {result:?}"
+        );
+    }
+
     /// Lists with explicit non-1 start values should not be auto-fixed
     /// (to preserve user intent).
     #[test]
