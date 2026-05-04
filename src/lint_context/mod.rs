@@ -91,6 +91,7 @@ pub struct LintContext<'a> {
     pandoc_header_slugs: std::collections::HashSet<String>, // Pre-computed Pandoc implicit header reference slugs
     example_list_marker_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc example-list marker ranges (@) / (@label)
     example_reference_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc example reference ranges (@label) inline
+    sub_super_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc subscript (~x~) and superscript (^x^) ranges
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -627,6 +628,15 @@ impl<'a> LintContext<'a> {
             }
         });
 
+        // Pre-compute Pandoc subscript (~x~) and superscript (^x^) ranges
+        let sub_super_ranges = profile_section!("Subscript/superscript ranges", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::detect_subscript_superscript_ranges(content)
+            } else {
+                Vec::new()
+            }
+        });
+
         // Pre-compute Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
         let shortcode_ranges = profile_section!("Shortcode ranges", profile, {
             use crate::utils::regex_cache::HUGO_SHORTCODE_REGEX;
@@ -678,6 +688,7 @@ impl<'a> LintContext<'a> {
             pandoc_header_slugs,
             example_list_marker_ranges,
             example_reference_ranges,
+            sub_super_ranges,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1112,6 +1123,14 @@ impl<'a> LintContext<'a> {
     pub fn is_in_example_reference(&self, byte_pos: usize) -> bool {
         let idx = self.example_reference_ranges.partition_point(|r| r.start <= byte_pos);
         idx > 0 && byte_pos < self.example_reference_ranges[idx - 1].end
+    }
+
+    /// Check if a byte position is within a Pandoc subscript (`~x~`) or
+    /// superscript (`^x^`) span. Active for Pandoc-compatible flavors. O(log n).
+    #[inline]
+    pub fn is_in_subscript_or_superscript(&self, byte_pos: usize) -> bool {
+        let idx = self.sub_super_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.sub_super_ranges[idx - 1].end
     }
 
     /// Returns true if `link_text` slugifies to a heading present in the document.

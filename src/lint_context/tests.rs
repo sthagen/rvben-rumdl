@@ -1504,3 +1504,39 @@ fn test_standard_flavor_skips_example_lists() {
     let ref_pos = content.find("(@good)").unwrap();
     assert!(!ctx.is_in_example_reference(ref_pos));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_subscript() {
+    use crate::config::MarkdownFlavor;
+    let content = "H~2~O is water.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("~2~").unwrap() + 1;
+    assert!(ctx.is_in_subscript_or_superscript(pos));
+}
+
+#[test]
+fn test_pandoc_flavor_detects_superscript() {
+    use crate::config::MarkdownFlavor;
+    let content = "2^10^ is 1024.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("^10^").unwrap() + 1;
+    assert!(ctx.is_in_subscript_or_superscript(pos));
+}
+
+#[test]
+fn test_pandoc_flavor_does_not_match_strikethrough() {
+    use crate::config::MarkdownFlavor;
+    let content = "This is ~~struck~~.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("~~struck~~").unwrap() + 2;
+    assert!(!ctx.is_in_subscript_or_superscript(pos));
+}
+
+#[test]
+fn test_standard_flavor_skips_sub_super() {
+    use crate::config::MarkdownFlavor;
+    let content = "H~2~O and 2^10^.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("~2~").unwrap() + 1;
+    assert!(!ctx.is_in_subscript_or_superscript(pos));
+}

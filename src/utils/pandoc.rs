@@ -307,6 +307,64 @@ pub fn collect_pandoc_header_slugs(content: &str) -> std::collections::HashSet<S
 }
 
 // ============================================================================
+// Subscript and Superscript Support
+// ============================================================================
+//
+// Pandoc `subscript` extension: `~x~` where x contains no whitespace or `~`.
+// Pandoc `superscript` extension: `^x^` where x contains no whitespace or `^`.
+//
+// These are distinct from GFM strikethrough (`~~text~~`) and Pandoc inline
+// footnotes (`^[...]`). The disambiguation rule for subscript is: reject any
+// match where the opening or closing `~` is immediately adjacent to another `~`
+// (which would make it GFM strikethrough). For superscript, reject matches
+// where a `^` neighbour would form `^^`.
+
+/// Pattern for Pandoc subscript: `~x~` where x is non-whitespace, non-`~`.
+static SUBSCRIPT_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"~[^\s~]+~").unwrap());
+
+/// Pattern for Pandoc superscript: `^x^` where x is non-whitespace, non-`^`.
+static SUPERSCRIPT_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\^[^\s^]+\^").unwrap());
+
+/// Detect Pandoc subscript (`~x~`) and superscript (`^x^`) ranges.
+///
+/// Returns byte ranges covering the full delimited span (including the
+/// delimiter characters). Excludes `~~strikethrough~~` and superscript-like
+/// runs of `^^`. The returned ranges are sorted by `start`.
+///
+/// Note: a `^[…]^` construct will also match `detect_inline_footnote_ranges`.
+/// Rules that distinguish footnotes from superscripts must check both accessors.
+pub fn detect_subscript_superscript_ranges(content: &str) -> Vec<ByteRange> {
+    let bytes = content.as_bytes();
+    let mut ranges = Vec::new();
+
+    for m in SUBSCRIPT_PATTERN.find_iter(content) {
+        // Reject if preceded or followed by `~` (would be strikethrough).
+        let prev = m.start().checked_sub(1).map(|i| bytes[i]).unwrap_or(0);
+        let next = bytes.get(m.end()).copied().unwrap_or(0);
+        if prev != b'~' && next != b'~' {
+            ranges.push(ByteRange {
+                start: m.start(),
+                end: m.end(),
+            });
+        }
+    }
+    for m in SUPERSCRIPT_PATTERN.find_iter(content) {
+        // Reject if preceded or followed by `^` (would be a `^^` run).
+        let prev = m.start().checked_sub(1).map(|i| bytes[i]).unwrap_or(0);
+        let next = bytes.get(m.end()).copied().unwrap_or(0);
+        if prev != b'^' && next != b'^' {
+            ranges.push(ByteRange {
+                start: m.start(),
+                end: m.end(),
+            });
+        }
+    }
+    // Sort because the two regex passes are merged and their results may interleave.
+    ranges.sort_by_key(|r| r.start);
+    ranges
+}
+
+// ============================================================================
 // Example List Support
 // ============================================================================
 //
@@ -754,6 +812,56 @@ Warning content here.
         let content = "Inline (@) is not a marker.\n";
         let ranges = detect_example_list_marker_ranges(content);
         assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_detect_subscript() {
+        let content = "H~2~O is water.\n";
+        let ranges = detect_subscript_superscript_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&content[ranges[0].start..ranges[0].end], "~2~");
+    }
+
+    #[test]
+    fn test_detect_superscript() {
+        let content = "2^10^ is 1024.\n";
+        let ranges = detect_subscript_superscript_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&content[ranges[0].start..ranges[0].end], "^10^");
+    }
+
+    #[test]
+    fn test_subscript_does_not_match_strikethrough() {
+        // `~~text~~` is GFM strikethrough, not subscript.
+        let content = "This is ~~struck~~.\n";
+        let ranges = detect_subscript_superscript_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_superscript_with_internal_space_is_not_matched() {
+        // Pandoc requires no whitespace inside `^...^`.
+        let content = "x^a b^ y\n";
+        let ranges = detect_subscript_superscript_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_subscript_at_start_of_input() {
+        // Position 0: previous-byte path uses checked_sub(1).unwrap_or(0).
+        let content = "~x~ rest of line\n";
+        let ranges = detect_subscript_superscript_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&content[ranges[0].start..ranges[0].end], "~x~");
+    }
+
+    #[test]
+    fn test_superscript_at_end_of_input_no_newline() {
+        // EOF: next-byte path uses bytes.get(end).unwrap_or(0).
+        let content = "text ^x^";
+        let ranges = detect_subscript_superscript_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&content[ranges[0].start..ranges[0].end], "^x^");
     }
 
     #[test]
