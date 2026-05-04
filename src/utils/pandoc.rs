@@ -485,6 +485,65 @@ pub fn detect_bracketed_span_ranges(content: &str) -> Vec<ByteRange> {
     ranges
 }
 
+// ============================================================================
+// Line Block Support
+// ============================================================================
+//
+// Pandoc `line_blocks` extension: a contiguous run of lines starting with `| `
+// (pipe space). Each line in a line block is rendered as a separate line of
+// verse or address. Continuation lines — indented, non-empty, not starting
+// with `|` — extend the immediately preceding block line.
+//
+// Distinguished from pipe tables: a line whose trimmed form ends with `|`
+// (i.e. `| col1 | col2 |`) is a table row, not a line block entry.
+
+/// Detect Pandoc line blocks (consecutive lines starting with `| `).
+///
+/// A line block is a contiguous run of lines where each line either:
+/// - Starts with `| ` (a single pipe followed by space) and does NOT
+///   end with `|` (which would be a pipe-table row), or
+/// - Is a continuation line (whitespace-indented, non-empty, not starting
+///   with `|`) appearing within an active line-block run.
+/// A blank line ends the run.
+pub fn detect_line_block_ranges(content: &str) -> Vec<ByteRange> {
+    let mut ranges = Vec::new();
+    let mut in_block = false;
+    let mut block_start = 0usize;
+    let mut block_end = 0usize;
+    let mut byte_offset = 0usize;
+
+    for line in content.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+        let is_line_block_line = trimmed.starts_with("| ") && !trimmed.trim_end().ends_with('|');
+        let is_continuation = in_block
+            && !trimmed.is_empty()
+            && trimmed.starts_with(|c: char| c.is_whitespace())
+            && !trimmed.trim_start().starts_with('|');
+
+        if is_line_block_line || is_continuation {
+            if !in_block {
+                block_start = byte_offset;
+                in_block = true;
+            }
+            block_end = byte_offset + line.len();
+        } else if in_block {
+            ranges.push(ByteRange {
+                start: block_start,
+                end: block_end,
+            });
+            in_block = false;
+        }
+        byte_offset += line.len();
+    }
+    if in_block {
+        ranges.push(ByteRange {
+            start: block_start,
+            end: block_end,
+        });
+    }
+    ranges
+}
+
 /// Detect Pandoc inline footnote ranges (`^[note text]`).
 ///
 /// Returns byte ranges covering the entire `^[...]` span. Intended for rules that
@@ -1012,6 +1071,59 @@ Warning content here.
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0].start, 0);
         assert_eq!(&content[ranges[0].start..ranges[0].end], "[head]{.intro}");
+    }
+
+    #[test]
+    fn test_detect_line_block_single() {
+        let content = "| The Lord of the Rings\n| by J.R.R. Tolkien\n";
+        let ranges = detect_line_block_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_line_block_no_trailing_newline() {
+        // Single-line block with no terminating newline must be flushed.
+        let content = "| Only line";
+        let ranges = detect_line_block_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_line_block_indented_pipe_is_not_continuation() {
+        // An indented line whose non-whitespace content begins with `|` is
+        // not a plain-text continuation; it ends the active block.
+        let content = "| First\n  | indented\n";
+        let ranges = detect_line_block_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].end, "| First\n".len());
+    }
+
+    #[test]
+    fn test_line_block_continuation_with_indent() {
+        // A line starting with whitespace (and NOT `|`) inside a line block is
+        // a continuation of the previous line.
+        let content = "| First line\n  continuation\n| Second\n";
+        let ranges = detect_line_block_ranges(content);
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[test]
+    fn test_line_block_separated_by_blank() {
+        let content = "| Block A\n\n| Block B\n";
+        let ranges = detect_line_block_ranges(content);
+        assert_eq!(ranges.len(), 2);
+    }
+
+    #[test]
+    fn test_line_block_does_not_match_pipe_table() {
+        // A `| col |...| row` line ending with `|` is a pipe-table row, not a line block.
+        let content = "| col1 | col2 |\n|------|------|\n";
+        let ranges = detect_line_block_ranges(content);
+        assert_eq!(ranges.len(), 0);
     }
 
     #[test]

@@ -94,6 +94,7 @@ pub struct LintContext<'a> {
     sub_super_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc subscript (~x~) and superscript (^x^) ranges
     inline_code_attr_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc inline code attribute ranges (`code`{.lang})
     bracketed_span_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc bracketed span ranges ([text]{attrs})
+    line_block_ranges: Vec<crate::utils::skip_context::ByteRange>,     // Pre-computed Pandoc line block ranges (| text)
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -657,6 +658,15 @@ impl<'a> LintContext<'a> {
             }
         });
 
+        // Pre-compute Pandoc line block ranges (| text) for Pandoc-compatible flavors
+        let line_block_ranges = profile_section!("Line block ranges", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::detect_line_block_ranges(content)
+            } else {
+                Vec::new()
+            }
+        });
+
         // Pre-compute Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
         let shortcode_ranges = profile_section!("Shortcode ranges", profile, {
             use crate::utils::regex_cache::HUGO_SHORTCODE_REGEX;
@@ -711,6 +721,7 @@ impl<'a> LintContext<'a> {
             sub_super_ranges,
             inline_code_attr_ranges,
             bracketed_span_ranges,
+            line_block_ranges,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1170,6 +1181,14 @@ impl<'a> LintContext<'a> {
     pub fn is_in_bracketed_span(&self, byte_pos: usize) -> bool {
         let idx = self.bracketed_span_ranges.partition_point(|r| r.start <= byte_pos);
         idx > 0 && byte_pos < self.bracketed_span_ranges[idx - 1].end
+    }
+
+    /// Returns true if `byte_pos` falls inside a Pandoc line block (`| text`).
+    /// Active for Pandoc-compatible flavors. O(log n).
+    #[inline]
+    pub fn is_in_line_block(&self, byte_pos: usize) -> bool {
+        let idx = self.line_block_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.line_block_ranges[idx - 1].end
     }
 
     /// Returns true if `link_text` slugifies to a heading present in the document.

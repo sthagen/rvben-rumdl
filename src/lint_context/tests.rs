@@ -1595,3 +1595,41 @@ fn test_standard_flavor_skips_bracketed_span() {
     let pos = content.find("[some text]").unwrap();
     assert!(!ctx.is_in_bracketed_span(pos));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_line_block() {
+    use crate::config::MarkdownFlavor;
+    let content = "| The Lord of the Rings\n| by J.R.R. Tolkien\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("Lord").unwrap();
+    assert!(ctx.is_in_line_block(pos));
+}
+
+#[test]
+fn test_pandoc_flavor_line_block_does_not_match_pipe_table() {
+    use crate::config::MarkdownFlavor;
+    let content = "| col1 | col2 |\n|------|------|\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("col1").unwrap();
+    assert!(!ctx.is_in_line_block(pos));
+}
+
+#[test]
+fn test_standard_flavor_skips_line_block() {
+    use crate::config::MarkdownFlavor;
+    let content = "| The Lord of the Rings\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("Lord").unwrap();
+    assert!(!ctx.is_in_line_block(pos));
+}
+
+#[test]
+fn test_pandoc_flavor_line_block_continuation_is_in_block() {
+    // The continuation line (whitespace-indented, no leading pipe) belongs
+    // to the active block, so a position inside it must report true.
+    use crate::config::MarkdownFlavor;
+    let content = "| First line\n  continuation here\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("continuation").unwrap();
+    assert!(ctx.is_in_line_block(pos));
+}
