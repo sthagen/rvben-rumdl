@@ -453,6 +453,38 @@ pub fn detect_example_reference_ranges(content: &str, marker_ranges: &[ByteRange
     ranges
 }
 
+// ============================================================================
+// Bracketed Span Support
+// ============================================================================
+//
+// Pandoc `bracketed_spans` extension: `[text]{attrs}` where attrs is a
+// non-empty Pandoc attribute block.
+//
+// Distinguished from `[text](url)` (link) and `[text][ref]` (reference link)
+// by requiring `]{` immediately adjacent — the `{` must directly follow `]`
+// with no intervening characters.
+
+/// Pattern for Pandoc bracketed span: `[text]{attrs}` where attrs is a
+/// non-empty Pandoc attribute block. The regex requires `]{` immediately
+/// adjacent (no characters between `]` and `{`), which excludes `[text](url)`
+/// links and `[text][ref]` reference links.
+static BRACKETED_SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[[^\]]+\]\{[^}]+\}").unwrap());
+
+/// Detect Pandoc bracketed span ranges (`[text]{attrs}`).
+///
+/// Returns byte ranges covering the full `[...]` + `{...}` span. The detector
+/// is structural only — it does not validate `attrs` content.
+pub fn detect_bracketed_span_ranges(content: &str) -> Vec<ByteRange> {
+    let mut ranges = Vec::new();
+    for m in BRACKETED_SPAN.find_iter(content) {
+        ranges.push(ByteRange {
+            start: m.start(),
+            end: m.end(),
+        });
+    }
+    ranges
+}
+
 /// Detect Pandoc inline footnote ranges (`^[note text]`).
 ///
 /// Returns byte ranges covering the entire `^[...]` span. Intended for rules that
@@ -929,6 +961,57 @@ Warning content here.
         let ranges = detect_inline_code_attr_ranges(content);
         assert_eq!(ranges.len(), 1);
         assert_eq!(&content[ranges[0].start..ranges[0].end], "{.lang #id key=value}");
+    }
+
+    #[test]
+    fn test_detect_bracketed_span() {
+        let content = "This is [some text]{.smallcaps} here.\n";
+        let ranges = detect_bracketed_span_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let r = &ranges[0];
+        assert_eq!(&content[r.start..r.end], "[some text]{.smallcaps}");
+    }
+
+    #[test]
+    fn test_bracketed_span_does_not_match_link() {
+        // `[text](url)` is a link, not a bracketed span.
+        let content = "A [link](http://example.com) here.\n";
+        let ranges = detect_bracketed_span_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_bracketed_span_does_not_match_reference_link() {
+        // `[text][ref]` is a reference link.
+        let content = "A [ref][def] here.\n[def]: http://example.com\n";
+        let ranges = detect_bracketed_span_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_bracketed_span_multiple_on_one_line() {
+        let content = "[one]{.a} and [two]{.b} together.\n";
+        let ranges = detect_bracketed_span_ranges(content);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&content[ranges[0].start..ranges[0].end], "[one]{.a}");
+        assert_eq!(&content[ranges[1].start..ranges[1].end], "[two]{.b}");
+    }
+
+    #[test]
+    fn test_bracketed_span_rejects_empty_content() {
+        // Both bracket and brace bodies require at least one character.
+        let content = "[]{.x} and [x]{} here.\n";
+        let ranges = detect_bracketed_span_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_bracketed_span_at_start_of_line() {
+        let content = "[head]{.intro} starts the line.\n";
+        let ranges = detect_bracketed_span_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(&content[ranges[0].start..ranges[0].end], "[head]{.intro}");
     }
 
     #[test]

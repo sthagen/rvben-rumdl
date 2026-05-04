@@ -1568,3 +1568,30 @@ fn test_standard_flavor_skips_inline_code_attribute() {
     let pos = content.find("{.python}").unwrap() + 1;
     assert!(!ctx.is_in_inline_code_attr(pos));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_bracketed_span() {
+    use crate::config::MarkdownFlavor;
+    let content = "This is [some text]{.smallcaps} here.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("[some text]").unwrap();
+    assert!(ctx.is_in_bracketed_span(pos));
+}
+
+#[test]
+fn test_pandoc_flavor_skips_link() {
+    use crate::config::MarkdownFlavor;
+    let content = "A [link](http://example.com) here.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("[link]").unwrap();
+    assert!(!ctx.is_in_bracketed_span(pos));
+}
+
+#[test]
+fn test_standard_flavor_skips_bracketed_span() {
+    use crate::config::MarkdownFlavor;
+    let content = "This is [some text]{.smallcaps} here.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("[some text]").unwrap();
+    assert!(!ctx.is_in_bracketed_span(pos));
+}
