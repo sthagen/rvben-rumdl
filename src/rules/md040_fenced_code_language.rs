@@ -265,19 +265,26 @@ impl Rule for MD040FencedCodeLanguage {
             let has_mkdocs_attrs_only =
                 ctx.flavor == crate::config::MarkdownFlavor::MkDocs && is_superfences_attribute(after_fence);
 
-            // Pandoc/Quarto brace-syntax code chunks fall into two forms:
+            // Pandoc/Quarto brace-syntax code chunks fall into three forms:
             //   1. `{=html}` raw blocks — accepted under any Pandoc-compatible flavor.
             //      Validated by `is_pandoc_raw_block_lang` (non-empty ASCII format name).
-            //   2. `{r}` / `{python}` exec chunks — accepted under Quarto only.
-            // Anything else wrapped in braces (e.g. `{r}` under pure Pandoc) is not a
-            // real language identifier and must be flagged as missing-language.
+            //   2. `{.python}` / `{.haskell .numberLines}` code-attribute syntax — the
+            //      first `.class` declares the language. Accepted under any
+            //      Pandoc-compatible flavor.
+            //   3. `{r}` / `{python}` exec chunks — accepted under Quarto only.
+            // Anything else wrapped in braces (e.g. `{r}` under pure Pandoc, or
+            // `{#myid}` with no class) is not a real language identifier and must be
+            // flagged as missing-language.
             let is_pandoc_raw =
                 ctx.flavor.is_pandoc_compatible() && crate::utils::pandoc::is_pandoc_raw_block_lang(after_fence);
+            let is_pandoc_class_attr =
+                ctx.flavor.is_pandoc_compatible() && crate::utils::pandoc::is_pandoc_code_class_attr(after_fence);
             let is_quarto_exec = ctx.flavor == crate::config::MarkdownFlavor::Quarto
                 && after_fence.starts_with('{')
                 && after_fence.ends_with('}')
-                && !is_pandoc_raw;
-            let has_pandoc_or_quarto_syntax = is_pandoc_raw || is_quarto_exec;
+                && !is_pandoc_raw
+                && !is_pandoc_class_attr;
+            let has_pandoc_or_quarto_syntax = is_pandoc_raw || is_pandoc_class_attr || is_quarto_exec;
             let is_unrecognized_brace_syntax =
                 after_fence.starts_with('{') && after_fence.ends_with('}') && !has_pandoc_or_quarto_syntax;
 
@@ -1371,6 +1378,115 @@ echo hi
         assert!(
             !result_pandoc.is_empty(),
             "MD040 should flag `{{r}}` under Pandoc as missing a real language"
+        );
+    }
+
+    /// Pandoc code-attribute syntax `{.lang}` declares the language and is valid under
+    /// both Pandoc and Quarto. MD040 must accept it.
+    #[test]
+    fn test_pandoc_class_attr_accepted_as_language() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD040FencedCodeLanguage::default();
+        let content = "```{.python}\nprint(\"hi\")\n```\n";
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result_pandoc = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            result_pandoc.is_empty(),
+            "MD040 under Pandoc should accept ```{{.python}}``` as language declaration: {result_pandoc:?}"
+        );
+
+        let ctx_quarto = LintContext::new(content, MarkdownFlavor::Quarto, None);
+        let result_quarto = rule.check(&ctx_quarto).unwrap();
+        assert!(
+            result_quarto.is_empty(),
+            "MD040 under Quarto should accept ```{{.python}}``` as language declaration: {result_quarto:?}"
+        );
+    }
+
+    /// Pandoc code attributes can include multiple classes plus key=value pairs.
+    /// The first class is the language; trailing attributes (e.g. `.numberLines`) are decoration.
+    #[test]
+    fn test_pandoc_class_attr_with_extra_attributes_accepted() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD040FencedCodeLanguage::default();
+        let content = "```{.haskell .numberLines}\nmain = putStrLn \"hi\"\n```\n";
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result_pandoc = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            result_pandoc.is_empty(),
+            "MD040 under Pandoc should accept ```{{.haskell .numberLines}}```: {result_pandoc:?}"
+        );
+
+        let ctx_quarto = LintContext::new(content, MarkdownFlavor::Quarto, None);
+        let result_quarto = rule.check(&ctx_quarto).unwrap();
+        assert!(
+            result_quarto.is_empty(),
+            "MD040 under Quarto should accept ```{{.haskell .numberLines}}```: {result_quarto:?}"
+        );
+    }
+
+    /// Pandoc code attributes can include id (`#myid`) and key=value attributes.
+    /// As long as a `.class` is present, the block declares a language.
+    #[test]
+    fn test_pandoc_class_attr_with_id_and_keyvalue_accepted() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD040FencedCodeLanguage::default();
+        let content = "```{#snippet .python startFrom=\"10\"}\nprint(1)\n```\n";
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result_pandoc = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            result_pandoc.is_empty(),
+            "MD040 under Pandoc should accept ```{{#snippet .python …}}```: {result_pandoc:?}"
+        );
+    }
+
+    /// Standard flavor knows nothing about Pandoc code attributes — they remain
+    /// unrecognized brace syntax and must still be flagged as missing-language.
+    #[test]
+    fn test_standard_still_flags_pandoc_class_attr() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD040FencedCodeLanguage::default();
+        let content = "```{.python}\nprint(\"hi\")\n```\n";
+
+        let ctx_standard = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result_standard = rule.check(&ctx_standard).unwrap();
+        assert!(
+            !result_standard.is_empty(),
+            "MD040 under Standard should still flag ```{{.python}}``` (no Pandoc support)"
+        );
+    }
+
+    /// A brace block with only an id (`{#myid}`) and no class declares no language.
+    /// Even under Pandoc this must remain flagged.
+    #[test]
+    fn test_pandoc_id_only_attr_still_flagged() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD040FencedCodeLanguage::default();
+        let content = "```{#myid}\ncode here\n```\n";
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result_pandoc = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            !result_pandoc.is_empty(),
+            "MD040 under Pandoc should flag ```{{#myid}}``` — id without class declares no language"
+        );
+    }
+
+    /// Empty `{}` braces declare nothing and must still be flagged under any flavor.
+    #[test]
+    fn test_pandoc_empty_braces_still_flagged() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD040FencedCodeLanguage::default();
+        let content = "```{}\ncode here\n```\n";
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result_pandoc = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            !result_pandoc.is_empty(),
+            "MD040 under Pandoc should flag ```{{}}``` (no language declared)"
         );
     }
 }

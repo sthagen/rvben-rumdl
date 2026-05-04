@@ -72,6 +72,28 @@ pub fn is_pandoc_raw_block_lang(lang: &str) -> bool {
     }
 }
 
+/// Return true if `lang` is a Pandoc code-attribute language declaration: a
+/// brace-delimited attribute list containing at least one `.class`, e.g.
+/// `{.python}`, `{.haskell .numberLines}`, `{#snippet .python startFrom="10"}`.
+///
+/// Pandoc treats the first `.class` inside the attribute block as the language
+/// for syntax highlighting. Tokens are space-separated; a `.class` token is one
+/// that starts with `.` followed by a non-empty identifier.
+pub fn is_pandoc_code_class_attr(lang: &str) -> bool {
+    let l = lang.trim();
+    if !l.starts_with('{') || !l.ends_with('}') || l.len() < 2 {
+        return false;
+    }
+    let inner = &l[1..l.len() - 1];
+    inner.split_whitespace().any(|tok| {
+        tok.len() > 1
+            && tok.starts_with('.')
+            && tok[1..]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    })
+}
+
 /// Get the indentation level of a div marker
 pub fn get_div_indent(line: &str) -> usize {
     let mut indent = 0;
@@ -1960,5 +1982,39 @@ After.
         // Reject inner whitespace and special characters.
         assert!(!is_pandoc_raw_block_lang("{=html }"));
         assert!(!is_pandoc_raw_block_lang("{=ht ml}"));
+    }
+
+    #[test]
+    fn test_is_pandoc_code_class_attr() {
+        // Single class declares the language.
+        assert!(is_pandoc_code_class_attr("{.python}"));
+        assert!(is_pandoc_code_class_attr("{.haskell}"));
+        assert!(is_pandoc_code_class_attr("{.rust}"));
+        // Multiple classes — first class is the language, rest are decoration.
+        assert!(is_pandoc_code_class_attr("{.haskell .numberLines}"));
+        // Class plus id.
+        assert!(is_pandoc_code_class_attr("{#myid .python}"));
+        // Class plus key=value attributes.
+        assert!(is_pandoc_code_class_attr("{.python startFrom=\"10\"}"));
+        // Class anywhere in the attribute list.
+        assert!(is_pandoc_code_class_attr("{#snippet .python startFrom=\"10\"}"));
+        // Identifiers with hyphens and underscores are valid.
+        assert!(is_pandoc_code_class_attr("{.objective-c}"));
+        assert!(is_pandoc_code_class_attr("{.my_lang}"));
+
+        // Reject — no class anywhere.
+        assert!(!is_pandoc_code_class_attr("{}"));
+        assert!(!is_pandoc_code_class_attr("{#myid}"));
+        assert!(!is_pandoc_code_class_attr("{startFrom=\"10\"}"));
+        // Reject — Pandoc raw block (handled by separate predicate).
+        assert!(!is_pandoc_code_class_attr("{=html}"));
+        // Reject — Quarto exec syntax (no leading dot).
+        assert!(!is_pandoc_code_class_attr("{r}"));
+        assert!(!is_pandoc_code_class_attr("{python}"));
+        // Reject — bare dot with no identifier.
+        assert!(!is_pandoc_code_class_attr("{.}"));
+        // Reject — missing braces.
+        assert!(!is_pandoc_code_class_attr(".python"));
+        assert!(!is_pandoc_code_class_attr("python"));
     }
 }

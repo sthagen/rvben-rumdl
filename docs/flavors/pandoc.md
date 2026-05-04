@@ -121,6 +121,31 @@ Another term
 
 **Affected rules**: MD040 (fenced code language)
 
+### Code Block Attributes
+
+Pandoc fenced code blocks may declare their language via attribute syntax.
+The first `.class` inside the attribute block is the language; additional
+classes, ids, and key=value pairs are decoration.
+
+````markdown
+```{.python}
+print("hi")
+```
+
+```{.haskell .numberLines}
+main = putStrLn "hi"
+```
+
+```{#snippet .python startFrom="10"}
+print(1)
+```
+````
+
+A brace block with no `.class` (e.g. `{#myid}` or `{}`) declares no language
+and is still flagged by MD040.
+
+**Affected rules**: MD040 (fenced code language)
+
 ### Math
 
 ```markdown
@@ -224,7 +249,7 @@ author: Jane Doe
 | MD032 | Blanks around lists         | Treat `:::` div markers as transparent                               |
 | MD034 | Flag all bare URLs          | Skip URLs inside line blocks and metadata blocks                     |
 | MD037 | Check emphasis spacing      | Skip bracketed spans and sub/superscripts                            |
-| MD040 | Standard language detection | Recognize `{=format}` raw-format declarations                        |
+| MD040 | Standard language detection | Recognize `{=format}` raw-format and `{.class …}` code-attribute declarations |
 | MD042 | Flag empty links            | Skip citations, footnotes, example refs, implicit header refs        |
 | MD051 | Validate link fragments     | Resolve fragments against Pandoc heading slugs                       |
 | MD052 | Flag undefined references   | Skip citations, footnotes, example refs, implicit header refs        |

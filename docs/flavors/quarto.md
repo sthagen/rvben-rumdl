@@ -118,7 +118,7 @@ Inline math $\alpha + \beta$ is also recognized.
 | MD034 | Flag all bare URLs          | Skip URLs inside shortcodes              |
 | MD037 | Check emphasis spacing      | Skip math blocks                         |
 | MD038 | Check all code spans        | Handle Quarto-specific syntax            |
-| MD040 | Standard language detection | Recognize `{language}` and `#\|` options |
+| MD040 | Standard language detection | Recognize `{language}` exec chunks, `{=format}` raw blocks, and `{.class …}` code attributes |
 | MD042 | Flag empty links            | Skip citations and shortcodes            |
 | MD049 | Check emphasis consistency  | Skip math blocks                         |
 | MD050 | Check strong consistency    | Skip math blocks                         |
