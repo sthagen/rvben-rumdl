@@ -1,17 +1,20 @@
-//! Quarto div and callout block detection utilities
+//! Pandoc Markdown syntax detection.
 //!
-//! This module provides detection for Quarto/Pandoc fenced div syntax which uses
-//! `:::` markers to create structured content blocks.
+//! This module provides detection for Pandoc Markdown constructs that affect
+//! rumdl rule output: fenced divs (`:::`), attribute lists (`{#id .class}`),
+//! citations (`[@key]`), bracketed spans (`[text]{.class}`), and other
+//! Pandoc-specific syntax.
 //!
-//! Common patterns:
-//! - `::: {.callout-note}` - Callout block with type
-//! - `::: {.callout-warning}` - Warning callout
-//! - `::: {#myid .class}` - Generic div with id and class
-//! - `::: myclass` - Simple div with class (shorthand)
-//! - `:::` - Closing marker
+//! Pandoc is the foundation; the Quarto flavor extends it with Quarto-only
+//! syntax (executable code blocks, shortcodes, cell options) elsewhere in
+//! the codebase. Anything that's pure Pandoc lives here.
 //!
-//! Callout types: `callout-note`, `callout-warning`, `callout-tip`,
-//! `callout-important`, `callout-caution`
+//! Common patterns this module handles:
+//! - `::: {.callout-note}` — fenced div with class
+//! - `::: {#myid .class}` — generic div with id and class
+//! - `:::` — closing marker
+//! - `{#id .class key="value"}` — Pandoc attribute lists
+//! - `@key`, `[@key]`, `[-@key]`, `[@a; @b]` — citations
 
 use regex::Regex;
 use std::sync::LazyLock;
@@ -113,8 +116,8 @@ impl DivTracker {
     }
 }
 
-/// Detect Quarto div block ranges in content
-/// Returns a vector of byte ranges (start, end) for each div block
+/// Detect fenced div block ranges in content.
+/// Returns a vector of byte ranges (start, end) for each div block.
 pub fn detect_div_block_ranges(content: &str) -> Vec<ByteRange> {
     let mut ranges = Vec::new();
     let mut tracker = DivTracker::new();
@@ -163,7 +166,7 @@ pub fn is_within_div_block_ranges(ranges: &[ByteRange], position: usize) -> bool
 }
 
 // ============================================================================
-// Pandoc/Quarto Citation Support
+// Citation Support
 // ============================================================================
 //
 // Pandoc citation syntax:

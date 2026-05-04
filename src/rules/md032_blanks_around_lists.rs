@@ -2,7 +2,7 @@ use crate::lint_context::LazyContLine;
 use crate::rule::{Fix, LintError, LintResult, LintWarning, Rule, RuleCategory, Severity};
 use crate::utils::blockquote::{content_after_blockquote, effective_indent_in_blockquote};
 use crate::utils::calculate_indentation_width_default;
-use crate::utils::quarto_divs;
+use crate::utils::pandoc;
 use crate::utils::range_utils::{LineIndex, calculate_line_range};
 use crate::utils::regex_cache::BLOCKQUOTE_PREFIX_RE;
 use regex::Regex;
@@ -251,7 +251,7 @@ impl MD032BlanksAroundLists {
                 // Skip Quarto div markers in Quarto flavor - they're transparent
                 if is_quarto {
                     let trimmed = info.content(ctx.content).trim();
-                    if quarto_divs::is_div_open(trimmed) || quarto_divs::is_div_close(trimmed) {
+                    if pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed) {
                         continue;
                     }
                 }
@@ -281,7 +281,7 @@ impl MD032BlanksAroundLists {
                 // Skip Quarto div markers in Quarto flavor - they're transparent
                 if is_quarto {
                     let trimmed = info.content(ctx.content).trim();
-                    if quarto_divs::is_div_open(trimmed) || quarto_divs::is_div_close(trimmed) {
+                    if pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed) {
                         continue;
                     }
                 }

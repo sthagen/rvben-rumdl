@@ -119,7 +119,7 @@ pub(super) fn compute_basic_line_info(
         let is_hr = !in_code_block && !in_front_matter && is_horizontal_rule_line(line);
 
         let in_quarto_div = flavor == MarkdownFlavor::Quarto
-            && crate::utils::quarto_divs::is_within_div_block_ranges(skip_ranges.quarto_div_ranges, byte_offset);
+            && crate::utils::pandoc::is_within_div_block_ranges(skip_ranges.quarto_div_ranges, byte_offset);
 
         // Detect div marker lines (::: opening/closing) outside code blocks and front matter
         let is_div_marker = !in_code_block && !in_front_matter && line.trim_start().starts_with(":::");

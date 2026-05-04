@@ -4,7 +4,7 @@
 use crate::rule::{Fix, LintError, LintResult, LintWarning, Rule, RuleCategory, Severity};
 use crate::rule_config_serde::RuleConfig;
 use crate::utils::kramdown_utils::is_kramdown_block_attribute;
-use crate::utils::quarto_divs;
+use crate::utils::pandoc;
 use crate::utils::range_utils::calculate_heading_range;
 use toml;
 
@@ -137,8 +137,7 @@ impl MD022BlanksAroundHeadings {
                             // Transparent - HTML comment
                         } else if line.in_kramdown_extension_block || line.is_kramdown_block_ial {
                             // Transparent - Kramdown preamble line
-                        } else if is_quarto && (quarto_divs::is_div_open(trimmed) || quarto_divs::is_div_close(trimmed))
-                        {
+                        } else if is_quarto && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
                             // Transparent - Quarto div marker in Quarto flavor
                         } else {
                             found_non_transparent = true;
@@ -204,7 +203,7 @@ impl MD022BlanksAroundHeadings {
                     } else if is_kramdown_block_attribute(trimmed) {
                         // Skip kramdown IAL - they are attached to headings and transparent
                         check_idx -= 1;
-                    } else if is_quarto && (quarto_divs::is_div_open(trimmed) || quarto_divs::is_div_close(trimmed)) {
+                    } else if is_quarto && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
                         // Skip Quarto div markers - they are transparent for blank line counting in Quarto flavor
                         check_idx -= 1;
                     } else {
@@ -362,8 +361,7 @@ impl Rule for MD022BlanksAroundHeadings {
                             // Transparent - HTML comment
                         } else if line.in_kramdown_extension_block || line.is_kramdown_block_ial {
                             // Transparent - Kramdown preamble line
-                        } else if is_quarto && (quarto_divs::is_div_open(trimmed) || quarto_divs::is_div_close(trimmed))
-                        {
+                        } else if is_quarto && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
                             // Transparent - Quarto div marker in Quarto flavor
                         } else {
                             found_non_transparent = true;
@@ -430,7 +428,7 @@ impl Rule for MD022BlanksAroundHeadings {
                     } else if is_kramdown_block_attribute(trimmed) {
                         // Skip kramdown IAL - they are attached to headings and transparent for blank line counting
                         continue;
-                    } else if is_quarto && (quarto_divs::is_div_open(trimmed) || quarto_divs::is_div_close(trimmed)) {
+                    } else if is_quarto && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
                         // Skip Quarto div markers - they are transparent for blank line counting in Quarto flavor
                         continue;
                     } else if ctx.lines[j].in_front_matter {
@@ -488,9 +486,7 @@ impl Rule for MD022BlanksAroundHeadings {
                     {
                         // Skip HTML comments - they are transparent for blank line counting
                         next_non_blank_idx += 1;
-                    } else if is_quarto
-                        && (quarto_divs::is_div_open(check_trimmed) || quarto_divs::is_div_close(check_trimmed))
-                    {
+                    } else if is_quarto && (pandoc::is_div_open(check_trimmed) || pandoc::is_div_close(check_trimmed)) {
                         // Skip Quarto div markers - they are transparent for blank line counting in Quarto flavor
                         next_non_blank_idx += 1;
                     } else {

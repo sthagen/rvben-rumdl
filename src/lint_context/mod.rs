@@ -147,7 +147,7 @@ impl<'a> LintContext<'a> {
         // Pre-compute Quarto div block ranges for Quarto flavor
         let quarto_div_ranges = profile_section!("Quarto div ranges", profile, {
             if flavor == MarkdownFlavor::Quarto {
-                crate::utils::quarto_divs::detect_div_block_ranges(content)
+                crate::utils::pandoc::detect_div_block_ranges(content)
             } else {
                 Vec::new()
             }
@@ -580,7 +580,7 @@ impl<'a> LintContext<'a> {
         // Pre-compute Pandoc/Quarto citation ranges for Quarto flavor
         let citation_ranges = profile_section!("Citation ranges", profile, {
             if flavor == MarkdownFlavor::Quarto {
-                crate::utils::quarto_divs::find_citation_ranges(content)
+                crate::utils::pandoc::find_citation_ranges(content)
             } else {
                 Vec::new()
             }

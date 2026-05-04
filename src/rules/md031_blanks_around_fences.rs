@@ -6,7 +6,7 @@ use crate::rule_config_serde::RuleConfig;
 use crate::utils::calculate_indentation_width_default;
 use crate::utils::kramdown_utils::is_kramdown_block_attribute;
 use crate::utils::mkdocs_admonitions;
-use crate::utils::quarto_divs;
+use crate::utils::pandoc;
 use crate::utils::range_utils::calculate_line_range;
 use serde::{Deserialize, Serialize};
 
@@ -203,7 +203,7 @@ impl Rule for MD031BlanksAroundFences {
 
         // Helper to check if a line is a Quarto div marker (opening or closing)
         let is_quarto_div_marker =
-            |line: &str| -> bool { is_quarto && (quarto_divs::is_div_open(line) || quarto_divs::is_div_close(line)) };
+            |line: &str| -> bool { is_quarto && (pandoc::is_div_open(line) || pandoc::is_div_close(line)) };
 
         // Check blank lines around each fenced code block
         for (opening_line, closing_line) in &fenced_blocks {
