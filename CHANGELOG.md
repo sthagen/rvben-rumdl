@@ -30,6 +30,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.88](https://github.com/rvben/rumdl/compare/v0.1.87...v0.1.88) - 2026-05-04
+
+### Added
+
+- **md051,md052**: handle Pandoc implicit header refs and divergent slugs ([8805001](https://github.com/rvben/rumdl/commit/8805001ba74297b912fbe8cc8929f78e2a44f01b))
+- **md042**: document parser-level exclusion of Pandoc inline footnotes, example refs, and implicit header refs ([6e4f7d8](https://github.com/rvben/rumdl/commit/6e4f7d891662c4981132ab8944e70a05ad7396ac))
+- **md040**: accept Pandoc {=format} raw blocks; keep {r}/{python} Quarto-only ([f4e446f](https://github.com/rvben/rumdl/commit/f4e446febe76f036000911954f92a901edb04947))
+- **md038**: skip Pandoc inline code attribute syntax ([db18bba](https://github.com/rvben/rumdl/commit/db18bbaad28a5f5ffa98027679f03a8c2f9acdc9))
+- **md037**: skip Pandoc sub/superscripts and bracketed spans ([80a2be6](https://github.com/rvben/rumdl/commit/80a2be686d6d92a4fbdf8117541ed52164877ae5))
+- **md034**: skip URLs inside Pandoc line blocks and metadata ([24469fc](https://github.com/rvben/rumdl/commit/24469fc9ab8011f4b7097954779137031e2057e7))
+- **md029**: skip Pandoc example-list markers under Pandoc-compatible flavor ([2421618](https://github.com/rvben/rumdl/commit/24216185a3e8c6592cc6cde1159efdb2ffdc564a))
+- **pandoc**: add is_pandoc_raw_block_lang helper ([60fb48f](https://github.com/rvben/rumdl/commit/60fb48f1b7d669c1f8311b2f7c2ec6bc2b972f7e))
+- **pandoc**: detect multi-line tables ([52c242a](https://github.com/rvben/rumdl/commit/52c242adcd175cadc2031ee5c1984026cc14890c))
+- **pandoc**: detect grid tables ([f331d65](https://github.com/rvben/rumdl/commit/f331d65f96cb5c2cb25c5ec1ff34da109395ae0b))
+- **pandoc**: detect multi-block YAML metadata ([0869d66](https://github.com/rvben/rumdl/commit/0869d66fae94b0a1b3a82c975db8d780afee0244))
+- **pandoc**: detect pipe-table captions ([44a20aa](https://github.com/rvben/rumdl/commit/44a20aa2128fc6d65a06905e362b156d96f4d36d))
+- **pandoc**: detect line blocks ([8f9590a](https://github.com/rvben/rumdl/commit/8f9590a9c589a0ee671e4b3d85b7223eef6967ca))
+- **pandoc**: detect bracketed spans ([0023c4a](https://github.com/rvben/rumdl/commit/0023c4adbb4cd5a3a038f30c7db59a2d912a92c0))
+- **pandoc**: detect inline code attribute syntax ([0cced5f](https://github.com/rvben/rumdl/commit/0cced5f9d5f736dffa817138bbd743e527f14d82))
+- **pandoc**: detect subscripts and superscripts ([d015748](https://github.com/rvben/rumdl/commit/d01574873fd567d7c773e1b43a1aeb943dc170bb))
+- **pandoc**: detect example lists and references ([ae9aeba](https://github.com/rvben/rumdl/commit/ae9aeba8144afb7eb98c85d519c384f2d2352925))
+- **pandoc**: detect implicit header references ([f290047](https://github.com/rvben/rumdl/commit/f2900471d6f3fe4dcf9af3c35f3c2f6bb77b668b))
+- **pandoc**: detect inline footnotes ^[note] ([b021786](https://github.com/rvben/rumdl/commit/b0217865145d1b9e7d271de25a2b29d6a9c9c103))
+- **rules**: re-gate Pandoc-syntax skips on is_pandoc_compatible() ([b9748c2](https://github.com/rvben/rumdl/commit/b9748c281d000c12ef55fa40386bb7b8a3ed075f))
+- **lint_context**: gate Pandoc pre-pass on is_pandoc_compatible() ([c342c93](https://github.com/rvben/rumdl/commit/c342c939e34a61b4b2bb5cf705ffc7d52e3eeeb1))
+- **cli**: accept --flavor pandoc ([5c83805](https://github.com/rvben/rumdl/commit/5c83805590b0f5270e66d47994563077bf7c7dee))
+- **flavor**: add is_pandoc_compatible() helper ([7c5964c](https://github.com/rvben/rumdl/commit/7c5964c3c46d26d80f7528a4c8c52a3b245e54a4))
+- **flavor**: add Pandoc variant to MarkdownFlavor ([af7b6d3](https://github.com/rvben/rumdl/commit/af7b6d31fa8759b0537c5f148f5a95d87e87c1d2))
+
+### Fixed
+
+- **server**: resolve clap --config arg collision causing panic ([deb93ef](https://github.com/rvben/rumdl/commit/deb93ef5b60fccf7c113606191ad795452c73506))
+- **md051**: emit Pandoc auto_identifiers suffix slugs for duplicate headings ([33c858e](https://github.com/rvben/rumdl/commit/33c858e0e11c583ce494163963da379a14b1f99a))
+- **md040**: accept Pandoc {.class} code attributes as language declaration ([10a5a8e](https://github.com/rvben/rumdl/commit/10a5a8ee278972fb3962a8f1be43f2c334d42c80))
+- **pandoc**: exclude link labels from citation detection ([186533b](https://github.com/rvben/rumdl/commit/186533b13ef83729aa5ae19dd50c060c0dc2a846))
+- **pandoc**: require citation `@` to sit at a citation boundary ([f4df478](https://github.com/rvben/rumdl/commit/f4df478bfc75762dd16c1a1e6e900e6341b4f268))
+- **md038**: keep checking inner whitespace on attributed code spans ([1bc9bef](https://github.com/rvben/rumdl/commit/1bc9befa1dc18c2b4225c1205ac811e03377f606))
+- **md063**: keep numeric ordinals lower-cased in title case ([ef3d881](https://github.com/rvben/rumdl/commit/ef3d881ce47b17ee7e1ef54566f958aea7f77189))
+- **MD009**: allow br_spaces on paragraph lines in strict mode ([526ec41](https://github.com/rvben/rumdl/commit/526ec4189984e8c1c7a6af7d30afba0c2bd24917))
+- **MD013**: preserve wildcard asterisks during reflow (#604) ([012c477](https://github.com/rvben/rumdl/commit/012c4779e4c55f7653480c5741199c6584c2bc5e))
+
 ## [0.1.87](https://github.com/rvben/rumdl/compare/v0.1.86...v0.1.87) - 2026-05-02
 
 ### Added
