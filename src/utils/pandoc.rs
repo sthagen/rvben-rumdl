@@ -215,6 +215,97 @@ pub fn has_citations(text: &str) -> bool {
 /// alphanumeric (which would be a superscript: `2^10^`).
 static INLINE_FOOTNOTE_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|[^\w!])(\^\[[^\]]*\])").unwrap());
 
+/// Compute the Pandoc-style slug for a heading text.
+///
+/// Pandoc's `auto_identifiers` extension:
+/// 1. Remove all formatting, links, etc.
+/// 2. Remove all footnotes.
+/// 3. Remove all non-alphanumeric characters except `_`, `-`, `.`.
+/// 4. Replace all spaces with `-`.
+/// 5. Lowercase letters.
+/// 6. If nothing remains, use `section`.
+pub fn pandoc_header_slug(text: &str) -> String {
+    let mut s = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '_' || c == '-' || c == '.' {
+            for lc in c.to_lowercase() {
+                s.push(lc);
+            }
+        } else if c.is_whitespace() {
+            // Collapse runs of whitespace to a single `-`.
+            if !s.ends_with('-') {
+                s.push('-');
+            }
+        }
+        // Drop other punctuation entirely.
+    }
+    let trimmed = s.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "section".to_string()
+    } else {
+        trimmed
+    }
+}
+
+/// Find headings in the document and return a set of their Pandoc slugs.
+///
+/// Scans ATX-style headings (lines beginning with one or more `#`) and computes
+/// a slug for each using [`pandoc_header_slug`]. The resulting set is used by
+/// the `implicit_header_references` extension detector in [`LintContext`].
+///
+/// Lines inside fenced code blocks (delimited by ` ``` ` or `~~~`, >= 3 chars)
+/// are skipped so that bash comments and shebang lines are not mistaken for
+/// headings.
+pub fn collect_pandoc_header_slugs(content: &str) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let mut slugs = HashSet::new();
+    let mut in_fence = false;
+    let mut fence_marker: Option<char> = None;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        // Detect fenced code block open/close. Pandoc fences are >= 3 backticks
+        // or >= 3 tildes at the start of a line (after optional indentation).
+        // A closing fence must use the same marker character as the opening one.
+        if let Some(c) = trimmed.chars().next()
+            && (c == '`' || c == '~')
+        {
+            let count = trimmed.chars().take_while(|&ch| ch == c).count();
+            if count >= 3 {
+                match fence_marker {
+                    None => {
+                        in_fence = true;
+                        fence_marker = Some(c);
+                    }
+                    Some(m) if m == c => {
+                        in_fence = false;
+                        fence_marker = None;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+        }
+        if in_fence {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix('#') {
+            let mut text = rest.trim_start_matches('#').trim();
+            // Strip trailing `{#id .class}` attribute block only when the `{...}`
+            // extends to the end of the text (possibly followed by whitespace).
+            // This prevents `{` appearing inside heading body text (e.g.
+            // `# Some {curly} word`) from being mistaken for an attribute block.
+            if let Some(idx) = text.rfind(" {")
+                && let Some(close_rel) = text[idx + 2..].find('}')
+                && text[idx + 2 + close_rel + 1..].trim().is_empty()
+            {
+                text = &text[..idx];
+            }
+            slugs.insert(pandoc_header_slug(text));
+        }
+    }
+    slugs
+}
+
 /// Detect Pandoc inline footnote ranges (`^[note text]`).
 ///
 /// Returns byte ranges covering the entire `^[...]` span. Intended for rules that
@@ -541,5 +632,60 @@ Warning content here.
         let content = "An image ![alt](url) and a link [txt](url).\n";
         let ranges = detect_inline_footnote_ranges(content);
         assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_implicit_header_reference_slug() {
+        // Pandoc lowercases, replaces internal whitespace with `-`, and strips
+        // punctuation other than `_`, `-`, `.`.
+        assert_eq!(pandoc_header_slug("My Section"), "my-section");
+        assert_eq!(pandoc_header_slug("API: v2!"), "api-v2");
+        assert_eq!(pandoc_header_slug("  Trim Me  "), "trim-me");
+        assert_eq!(pandoc_header_slug("Multiple   Spaces"), "multiple-spaces");
+    }
+
+    #[test]
+    fn test_collect_pandoc_header_slugs() {
+        let content = "# My Section\n\n## Sub-section\n\nbody\n";
+        let slugs = collect_pandoc_header_slugs(content);
+        assert!(slugs.contains("my-section"));
+        assert!(slugs.contains("sub-section"));
+    }
+
+    #[test]
+    fn test_collect_pandoc_header_slugs_strips_attribute_block() {
+        let content = "# My Section {#custom-id .red}\n## Plain Section\n";
+        let slugs = collect_pandoc_header_slugs(content);
+        assert!(slugs.contains("my-section"));
+        assert!(slugs.contains("plain-section"));
+        // Slug must not include the attribute block contents.
+        assert!(!slugs.iter().any(|s| s.contains("custom-id")));
+    }
+
+    #[test]
+    fn test_collect_pandoc_header_slugs_preserves_body_braces() {
+        // `{` in heading body must NOT be mistaken for an attribute block.
+        let content = "# Some {curly} word in title\n";
+        let slugs = collect_pandoc_header_slugs(content);
+        assert!(slugs.contains("some-curly-word-in-title"));
+    }
+
+    #[test]
+    fn test_collect_pandoc_header_slugs_skips_code_blocks() {
+        let content = "\
+# Real Heading
+
+```bash
+# This is a bash comment
+#!/usr/bin/env bash
+```
+
+# Another Heading
+";
+        let slugs = collect_pandoc_header_slugs(content);
+        assert!(slugs.contains("real-heading"));
+        assert!(slugs.contains("another-heading"));
+        assert!(!slugs.contains("this-is-a-bash-comment"));
+        assert!(!slugs.iter().any(|s| s.contains("usr-bin")));
     }
 }

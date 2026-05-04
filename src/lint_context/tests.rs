@@ -1455,3 +1455,18 @@ fn test_standard_flavor_skips_inline_footnotes() {
         "Standard flavor should not detect inline footnote ranges"
     );
 }
+
+#[test]
+fn test_pandoc_flavor_resolves_implicit_header_reference() {
+    let content = "# My Section\n\nSee [My Section] for details.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    assert!(ctx.matches_implicit_header_reference("My Section"));
+    assert!(!ctx.matches_implicit_header_reference("Nonexistent"));
+}
+
+#[test]
+fn test_standard_flavor_does_not_resolve_implicit_header_reference() {
+    let content = "# My Section\n\nSee [My Section] for details.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    assert!(!ctx.matches_implicit_header_reference("My Section"));
+}

@@ -88,6 +88,7 @@ pub struct LintContext<'a> {
     citation_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto citation ranges (@key, [@key])
     pandoc_div_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto div block ranges (::: ... :::)
     inline_footnote_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc inline footnote ranges (^[...])
+    pandoc_header_slugs: std::collections::HashSet<String>, // Pre-computed Pandoc implicit header reference slugs
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -597,6 +598,15 @@ impl<'a> LintContext<'a> {
             }
         });
 
+        // Pre-compute Pandoc implicit header reference slugs for Pandoc-compatible flavors
+        let pandoc_header_slugs = profile_section!("Pandoc header slugs", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::collect_pandoc_header_slugs(content)
+            } else {
+                std::collections::HashSet::new()
+            }
+        });
+
         // Pre-compute Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
         let shortcode_ranges = profile_section!("Shortcode ranges", profile, {
             use crate::utils::regex_cache::HUGO_SHORTCODE_REGEX;
@@ -645,6 +655,7 @@ impl<'a> LintContext<'a> {
             citation_ranges,
             pandoc_div_ranges,
             inline_footnote_ranges,
+            pandoc_header_slugs,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1063,6 +1074,13 @@ impl<'a> LintContext<'a> {
     pub fn is_in_inline_footnote(&self, byte_pos: usize) -> bool {
         let idx = self.inline_footnote_ranges.partition_point(|r| r.start <= byte_pos);
         idx > 0 && byte_pos < self.inline_footnote_ranges[idx - 1].end
+    }
+
+    /// Returns true if `link_text` slugifies to a heading present in the document.
+    /// Active only for Pandoc-compatible flavors.
+    pub fn matches_implicit_header_reference(&self, link_text: &str) -> bool {
+        let slug = crate::utils::pandoc::pandoc_header_slug(link_text);
+        self.pandoc_header_slugs.contains(&slug)
     }
 
     /// Check if a byte position is within a Hugo/Quarto shortcode ({{< ... >}} or {{% ... %}}). O(log n).
