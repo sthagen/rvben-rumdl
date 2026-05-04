@@ -2,6 +2,14 @@
 
 For projects using [Quarto](https://quarto.org/) or RMarkdown for scientific publishing.
 
+> **Built on Pandoc.** The Quarto flavor includes all
+> [Pandoc-flavor](pandoc.md) syntax — fenced divs, attribute lists,
+> citations, footnotes, definition lists, math, raw format blocks, grid
+> and multi-line tables, line blocks, sub/superscripts, example lists,
+> and bracketed spans. The sections below describe what Quarto adds on
+> top of Pandoc: executable code blocks, shortcodes, and Quarto-specific
+> div patterns.
+
 ## Supported Patterns
 
 ### Cell Options
