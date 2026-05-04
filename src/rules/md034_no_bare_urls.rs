@@ -322,6 +322,15 @@ impl MD034NoBareUrls {
                 continue;
             }
 
+            // Skip URLs inside Pandoc line blocks (`| text`) or YAML metadata blocks.
+            // Both constructs treat their content as literal/structured text where bare
+            // URLs are intentional and should not be reformatted.
+            if ctx.flavor.is_pandoc_compatible()
+                && (ctx.is_in_line_block(absolute_pos) || ctx.is_in_pandoc_metadata(absolute_pos))
+            {
+                continue;
+            }
+
             // Clean up the URL by removing trailing punctuation
             let trimmed_url = self.trim_trailing_punctuation(url_str);
 
@@ -386,6 +395,13 @@ impl MD034NoBareUrls {
 
                     // Check if email is inside an HTML tag (handles multiline tags)
                     if ctx.is_in_html_tag(absolute_pos) {
+                        continue;
+                    }
+
+                    // Skip emails inside Pandoc line blocks or YAML metadata blocks.
+                    if ctx.flavor.is_pandoc_compatible()
+                        && (ctx.is_in_line_block(absolute_pos) || ctx.is_in_pandoc_metadata(absolute_pos))
+                    {
                         continue;
                     }
 
@@ -643,6 +659,52 @@ mod tests {
         assert!(
             result.is_empty(),
             "URL in backticks inside nested MDX component must not be flagged: {result:?}"
+        );
+    }
+
+    /// URLs inside Pandoc line blocks (`| text`) must not be flagged as bare URLs.
+    #[test]
+    fn test_pandoc_skips_urls_in_line_blocks() {
+        use crate::config::MarkdownFlavor;
+        use crate::lint_context::LintContext;
+        let rule = MD034NoBareUrls;
+        let content = "| See https://example.com\n| For details\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD034 should skip URLs in Pandoc line blocks: {result:?}"
+        );
+    }
+
+    /// URLs inside Pandoc YAML metadata blocks must not be flagged.
+    #[test]
+    fn test_pandoc_skips_urls_in_metadata() {
+        use crate::config::MarkdownFlavor;
+        use crate::lint_context::LintContext;
+        let rule = MD034NoBareUrls;
+        let content = "---\nhomepage: https://example.com\n---\n\nBody.\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD034 should skip URLs in Pandoc YAML metadata: {result:?}"
+        );
+    }
+
+    /// Standard flavor must still flag bare URLs in lines starting with `|`
+    /// (which are not interpreted as line blocks).
+    #[test]
+    fn test_standard_still_flags_urls_in_pipe_prefixed_lines() {
+        use crate::config::MarkdownFlavor;
+        use crate::lint_context::LintContext;
+        let rule = MD034NoBareUrls;
+        let content = "| See https://example.com\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            !result.is_empty(),
+            "MD034 should still flag URLs in pipe-prefixed lines under Standard flavor"
         );
     }
 
