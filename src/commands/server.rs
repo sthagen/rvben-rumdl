@@ -12,18 +12,6 @@ pub fn handle_server(port: Option<u16>, stdio: bool, verbose: bool, config: Opti
         log::set_max_level(log::LevelFilter::Debug);
     }
 
-    // Validate config file exists if provided
-    if let Some(config_path) = &config
-        && !std::path::Path::new(config_path).exists()
-    {
-        eprintln!(
-            "{}: Configuration file not found: {}",
-            "Error".red().bold(),
-            config_path
-        );
-        exit::tool_error();
-    }
-
     // Start the LSP server
     let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
         eprintln!("{}: Failed to create Tokio runtime: {}", "Error".red().bold(), e);

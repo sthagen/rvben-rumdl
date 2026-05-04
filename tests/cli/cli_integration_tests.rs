@@ -1077,6 +1077,100 @@ fn test_check_help_prefers_canonical_lint_flags() {
 }
 
 #[test]
+fn test_server_with_config_flag_does_not_panic() {
+    // Regression test for #607. Before the fix, the Server subcommand
+    // declared its own `config: Option<String>` arg which collided with
+    // the global `config: Vec<SingleConfigArgument>` introduced for
+    // inline TOML overrides. clap stored the value under the global
+    // definition, then panicked when the Server destructure asked for
+    // it as Option<String>.
+    let rumdl_exe = env!("CARGO_BIN_EXE_rumdl");
+    let output = Command::new(rumdl_exe)
+        .args(["server", "-c", "/nonexistent/path/that/should/not/exist/.rumdl.toml"])
+        .output()
+        .expect("Failed to execute 'rumdl server -c <path>'");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    assert!(
+        !stderr.contains("Mismatch between definition and access"),
+        "rumdl server -c <path> panicked due to clap argument name collision: {stderr}"
+    );
+    assert!(
+        !output.status.success(),
+        "rumdl server with non-existent config should exit non-zero, stderr: {stderr}"
+    );
+    assert!(
+        stderr.to_lowercase().contains("config file not found")
+            || stderr.to_lowercase().contains("configuration file not found"),
+        "expected a 'config file not found' error, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_server_loads_config_passed_via_short_c_flag() {
+    // Regression test for the v0.1.85 silent-drop variant of #607: even when the
+    // Server subcommand declared its own `--config` alongside the global one
+    // (both `Option<String>`), clap could route the parsed value to the global
+    // slot, leaving the subcommand-level `config` unset. handle_server then
+    // received `None` and the LSP started without honouring the user's file.
+    //
+    // After the fix, the global flag is the single source of truth, so
+    // `rumdl server -c <path>` must end up loading <path>. We assert this by
+    // spawning the binary with verbose logging, sending an LSP `initialize`,
+    // and looking for the "Loaded rumdl config from: <path>" message that
+    // `load_configuration` emits when an explicit config_path is honored.
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let temp = tempdir().unwrap();
+    let config_path = temp.path().join("custom.rumdl.toml");
+    fs::write(
+        &config_path,
+        "[global]\ndisable = [\"MD013\"]\n\n[MD060]\nenabled = true\n",
+    )
+    .unwrap();
+
+    let rumdl_exe = env!("CARGO_BIN_EXE_rumdl");
+    let mut child = Command::new(rumdl_exe)
+        .args(["server", "-v", "-c"])
+        .arg(&config_path)
+        .env("RUST_LOG", "info")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn 'rumdl server -c <path>'");
+
+    // Send a minimal LSP initialize so load_configuration runs.
+    let init = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"capabilities":{{}},"rootUri":"file://{}","processId":null}}}}"#,
+        temp.path().display()
+    );
+    let frame = format!("Content-Length: {}\r\n\r\n{}", init.len(), init);
+    let stdin = child.stdin.as_mut().expect("stdin should be piped");
+    stdin.write_all(frame.as_bytes()).unwrap();
+    stdin.flush().unwrap();
+
+    // Give the server time to initialize and emit the load log.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+
+    let _ = child.kill();
+    let output = child.wait_with_output().expect("child should be reapable");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let expected_path = config_path.display().to_string();
+    assert!(
+        stderr.contains(&format!("Loaded rumdl config from: {expected_path}")),
+        "rumdl server -c <path> did not honour the config file. \
+         Expected stderr to contain 'Loaded rumdl config from: {expected_path}', got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Mismatch between definition and access"),
+        "rumdl server -c <path> panicked due to clap argument name collision: {stderr}"
+    );
+}
+
+#[test]
 fn test_server_help_hides_stdio_compat_flag() {
     let rumdl_exe = env!("CARGO_BIN_EXE_rumdl");
     let output = Command::new(rumdl_exe)

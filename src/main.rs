@@ -161,9 +161,6 @@ enum Commands {
         /// Enable verbose logging
         #[arg(short, long)]
         verbose: bool,
-        /// Path to rumdl configuration file
-        #[arg(short, long)]
-        config: Option<String>,
     },
     /// Generate or check JSON schema for rumdl.toml
     Schema {
@@ -376,13 +373,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             Commands::Schema { action } => {
                 commands::schema::handle_schema(action);
             }
-            Commands::Server {
-                port,
-                stdio,
-                verbose,
-                config,
-            } => {
-                commands::server::handle_server(port, stdio, verbose, config);
+            Commands::Server { port, stdio, verbose } => {
+                let config_path = if cli.no_config || cli.isolated {
+                    None
+                } else {
+                    config_path.clone()
+                };
+                commands::server::handle_server(port, stdio, verbose, config_path);
             }
             Commands::Import {
                 file,
