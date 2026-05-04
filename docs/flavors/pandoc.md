@@ -216,21 +216,32 @@ author: Jane Doe
 
 | Rule  | Standard Behavior           | Pandoc Behavior                                                      |
 | ----- | --------------------------- | -------------------------------------------------------------------- |
+| MD022 | Blanks around headings      | Treat `:::` div markers as transparent (don't require extra blanks)  |
 | MD029 | Validate ordered prefixes   | Skip `(@)` / `(@label)` example markers                              |
+| MD031 | Blanks around fences        | Allow Pandoc fenced divs without extra blanks                        |
+| MD032 | Blanks around lists         | Treat `:::` div markers as transparent                               |
 | MD034 | Flag all bare URLs          | Skip URLs inside line blocks and metadata blocks                     |
-| MD037 | Check emphasis spacing      | Skip math, bracketed spans, sub/superscripts                         |
+| MD037 | Check emphasis spacing      | Skip bracketed spans and sub/superscripts                            |
 | MD038 | Check all code spans        | Skip trailing `{...}` after inline code                              |
 | MD040 | Standard language detection | Recognize `{=format}` raw-format declarations                        |
 | MD042 | Flag empty links            | Skip citations, footnotes, example refs, implicit header refs        |
-| MD049 | Check emphasis style        | Skip math blocks                                                     |
-| MD050 | Check strong style          | Skip math blocks                                                     |
 | MD051 | Validate link fragments     | Resolve fragments against Pandoc heading slugs                       |
 | MD052 | Flag undefined references   | Skip citations, footnotes, example refs, implicit header refs        |
-| MD055 | Validate table pipe style   | Skip grid, multi-line, and line-block regions                        |
-| MD056 | Validate table columns      | Skip grid, multi-line, line-block, and caption regions               |
-| MD058 | Blanks around tables        | Skip grid, multi-line, and line-block regions                        |
-| MD060 | Table format                | Skip grid, multi-line, and line-block regions                        |
-| MD075 | Orphaned table rows         | Skip grid, multi-line, and line-block regions                        |
+
+### Parser-Level Exclusions
+
+Some Pandoc constructs are excluded by rumdl's parser for **all** flavors,
+not by a Pandoc-specific guard. These rules therefore behave identically
+under Pandoc and Standard:
+
+- **Math blocks** (`$$...$$`, `$...$`): MD037, MD049, MD050 skip math
+  contexts universally.
+- **Grid tables** (`+---+---+`), **multi-line tables**
+  (`---------- -------`), **line blocks** (`| line\n| line`), and
+  **pipe-table captions** (`: caption`): MD055, MD056, MD058, MD060,
+  MD075 iterate the table-block scanner, which only recognizes pipe
+  tables with `|`-bounded delimiter rows. The other table shapes never
+  enter the iteration source — under any flavor.
 
 ## Limitations
 
