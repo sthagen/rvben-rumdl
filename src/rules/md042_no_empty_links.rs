@@ -977,4 +977,86 @@ UnboundLocalError: cannot access local variable 'calls' where it is not associat
             "MD042 should skip Pandoc citations under Pandoc flavor: {result:?}"
         );
     }
+
+    /// Pandoc inline footnotes `^[note]` must not be flagged as empty links.
+    ///
+    /// pulldown-cmark does not recognise `^[...]` as any link or footnote construct:
+    /// the leading `^` is emitted as plain text, and the trailing `[a footnote]` is
+    /// considered a shortcut reference candidate whose broken-link callback returns
+    /// `None`, so no `Event::Start(Tag::Link {..})` is ever emitted. MD042 iterates
+    /// `ctx.links`, so the construct is invisible to it. No runtime guard is needed
+    /// in MD042 — this test documents the invariant.
+    #[test]
+    fn test_pandoc_flavor_skips_inline_footnotes() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD042NoEmptyLinks::new();
+        let content = "Text ^[a footnote] more.\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(result.is_empty(), "MD042 must not flag ^[footnote]: {result:?}");
+    }
+
+    /// Pandoc example references `(@label)` must not be flagged as empty links.
+    ///
+    /// These are excluded at the parser level: `(@label)` is plain text (parenthesised),
+    /// not bracket syntax, so the link parser never emits a link event for it.
+    /// No runtime guard is needed in MD042 — this test documents the invariant.
+    #[test]
+    fn test_pandoc_flavor_skips_example_references() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD042NoEmptyLinks::new();
+        let content = "(@good) Example.\n\nAs shown in (@good), this works.\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(result.is_empty(), "MD042 must not flag (@label) refs: {result:?}");
+    }
+
+    /// Pandoc implicit header references `[My Section]` (matching a heading) must not
+    /// be flagged as empty links.
+    ///
+    /// pulldown-cmark has no notion of Pandoc's implicit-header-reference resolution:
+    /// `[My Section]` is treated as a shortcut reference, the broken-link callback
+    /// returns `None` (no matching link reference definition exists), and the bracket
+    /// text is rendered literally. No `Tag::Link` event is emitted, so MD042 never
+    /// sees it. The `# My Section` heading in the fixture is intentional — it is the
+    /// construct that *would* make this an implicit reference under Pandoc — and the
+    /// test asserts that even with the heading present, MD042 does not flag the
+    /// bracketed text. No runtime guard is needed in MD042.
+    #[test]
+    fn test_pandoc_flavor_skips_implicit_header_refs() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD042NoEmptyLinks::new();
+        let content = "# My Section\n\nSee [My Section] for details.\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD042 must not flag implicit header refs: {result:?}"
+        );
+    }
+
+    /// Cross-flavor regression: the existing citation guard is active only under
+    /// Pandoc-compatible flavor. A real empty link (empty URL) is still flagged under
+    /// Pandoc flavor, confirming that the pandoc_mode guard does not suppress ordinary
+    /// empty links.
+    #[test]
+    fn test_pandoc_mode_still_flags_ordinary_empty_links() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD042NoEmptyLinks::new();
+        // A normal inline link with empty URL — must be flagged even in Pandoc mode.
+        let content = "[some text]()\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            !result.is_empty(),
+            "MD042 must still flag [text]() as empty link under Pandoc flavor: {result:?}"
+        );
+        // Same content under Standard flavor must also be flagged (no regression).
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            !result_std.is_empty(),
+            "MD042 must flag [text]() under Standard flavor: {result_std:?}"
+        );
+    }
 }
