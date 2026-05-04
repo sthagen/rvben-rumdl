@@ -669,9 +669,9 @@ impl Rule for MD051LinkFragments {
                 continue;
             }
 
-            // Skip Quarto/Pandoc citations ([@citation], @citation)
+            // Skip Pandoc/Quarto citations ([@citation], @citation)
             // Citations are bibliography references, not link fragments
-            if ctx.flavor == crate::config::MarkdownFlavor::Quarto && ctx.is_in_citation(link.byte_offset) {
+            if ctx.flavor.is_pandoc_compatible() && ctx.is_in_citation(link.byte_offset) {
                 continue;
             }
 
@@ -1347,5 +1347,20 @@ See [link](#nonexistent) for details."#;
         );
         assert_eq!(file_index.cross_file_links[0].target_path, "other.md");
         assert_eq!(file_index.cross_file_links[0].fragment, "section");
+    }
+
+    #[test]
+    fn test_pandoc_flavor_skips_citations() {
+        // Pandoc citations ([@key]) are bibliography references, not link fragments.
+        // MD051 should skip them under Pandoc flavor, mirroring the Quarto skip behavior
+        // tested in test_quarto_cross_references.
+        let rule = MD051LinkFragments::new();
+        let content = "# Test Document\n\nSee [@smith2020] for details.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD051 should skip Pandoc citations under Pandoc flavor: {result:?}"
+        );
     }
 }

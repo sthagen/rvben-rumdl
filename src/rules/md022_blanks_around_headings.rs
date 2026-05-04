@@ -117,7 +117,7 @@ impl MD022BlanksAroundHeadings {
         // Content is normalized to LF at I/O boundary
         let line_ending = "\n";
         let had_trailing_newline = ctx.content.ends_with('\n');
-        let is_quarto = ctx.flavor == crate::config::MarkdownFlavor::Quarto;
+        let is_pandoc = ctx.flavor.is_pandoc_compatible();
         let mut result = Vec::new();
         let mut skip_count: usize = 0;
 
@@ -137,8 +137,8 @@ impl MD022BlanksAroundHeadings {
                             // Transparent - HTML comment
                         } else if line.in_kramdown_extension_block || line.is_kramdown_block_ial {
                             // Transparent - Kramdown preamble line
-                        } else if is_quarto && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
-                            // Transparent - Quarto div marker in Quarto flavor
+                        } else if is_pandoc && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
+                            // Transparent - Pandoc/Quarto div marker in Pandoc-compatible flavor
                         } else {
                             found_non_transparent = true;
                         }
@@ -203,8 +203,8 @@ impl MD022BlanksAroundHeadings {
                     } else if is_kramdown_block_attribute(trimmed) {
                         // Skip kramdown IAL - they are attached to headings and transparent
                         check_idx -= 1;
-                    } else if is_quarto && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
-                        // Skip Quarto div markers - they are transparent for blank line counting in Quarto flavor
+                    } else if is_pandoc && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
+                        // Skip Pandoc/Quarto div markers — transparent for blank line counting
                         check_idx -= 1;
                     } else {
                         break;
@@ -343,7 +343,7 @@ impl Rule for MD022BlanksAroundHeadings {
 
         // Content is normalized to LF at I/O boundary
         let line_ending = "\n";
-        let is_quarto = ctx.flavor == crate::config::MarkdownFlavor::Quarto;
+        let is_pandoc = ctx.flavor.is_pandoc_compatible();
 
         let heading_at_start_idx = {
             let mut found_non_transparent = false;
@@ -361,8 +361,8 @@ impl Rule for MD022BlanksAroundHeadings {
                             // Transparent - HTML comment
                         } else if line.in_kramdown_extension_block || line.is_kramdown_block_ial {
                             // Transparent - Kramdown preamble line
-                        } else if is_quarto && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
-                            // Transparent - Quarto div marker in Quarto flavor
+                        } else if is_pandoc && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
+                            // Transparent - Pandoc/Quarto div marker in Pandoc-compatible flavor
                         } else {
                             found_non_transparent = true;
                         }
@@ -428,8 +428,8 @@ impl Rule for MD022BlanksAroundHeadings {
                     } else if is_kramdown_block_attribute(trimmed) {
                         // Skip kramdown IAL - they are attached to headings and transparent for blank line counting
                         continue;
-                    } else if is_quarto && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
-                        // Skip Quarto div markers - they are transparent for blank line counting in Quarto flavor
+                    } else if is_pandoc && (pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed)) {
+                        // Skip Pandoc/Quarto div markers — transparent for blank line counting
                         continue;
                     } else if ctx.lines[j].in_front_matter {
                         // Skip frontmatter - first heading after frontmatter doesn't need blank line above
@@ -486,8 +486,8 @@ impl Rule for MD022BlanksAroundHeadings {
                     {
                         // Skip HTML comments - they are transparent for blank line counting
                         next_non_blank_idx += 1;
-                    } else if is_quarto && (pandoc::is_div_open(check_trimmed) || pandoc::is_div_close(check_trimmed)) {
-                        // Skip Quarto div markers - they are transparent for blank line counting in Quarto flavor
+                    } else if is_pandoc && (pandoc::is_div_open(check_trimmed) || pandoc::is_div_close(check_trimmed)) {
+                        // Skip Pandoc/Quarto div markers — transparent for blank line counting
                         next_non_blank_idx += 1;
                     } else {
                         break;
@@ -1906,6 +1906,20 @@ More content."#;
         assert!(
             !warnings.is_empty(),
             "Should still require blank line when not present: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_pandoc_div_marker_transparent_above_heading() {
+        // Pandoc div marker should be transparent for blank line counting above heading,
+        // mirroring the Quarto behavior tested in test_quarto_div_marker_transparent_above_heading.
+        let rule = MD022BlanksAroundHeadings::default();
+        let content = "Content\n\n::: {.callout-note}\n# Heading\n\nMore content\n:::\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "MD022 should treat Pandoc div marker as transparent above heading: {warnings:?}"
         );
     }
 }

@@ -309,7 +309,9 @@ impl Rule for MD038NoSpaceInCode {
                 }
 
                 // Skip inline R code in Quarto/RMarkdown: `r expression`
-                // This is a legitimate pattern where space is required after 'r'
+                // This is RMarkdown/Quarto-specific syntax for inline R evaluation.
+                // Pandoc itself has no concept of executing inline R expressions,
+                // so the exemption is intentionally Quarto-only.
                 if ctx.flavor == crate::config::MarkdownFlavor::Quarto
                     && trimmed.starts_with('r')
                     && trimmed.len() > 1
@@ -1413,5 +1415,34 @@ Regular code: `function test() {}`
         let ctx_cjk = crate::lint_context::LintContext::new(content_cjk, crate::config::MarkdownFlavor::Standard, None);
         let result_cjk = rule.check(&ctx_cjk);
         assert!(result_cjk.is_ok(), "Should not panic with CJK between code spans");
+    }
+
+    #[test]
+    fn test_pandoc_inline_r_code_not_exempt() {
+        // The `r expression` pattern is RMarkdown/Quarto-specific inline R evaluation syntax.
+        // A code span like `r foo ` (trailing space, starts with `r `) triggers the Quarto
+        // guard when in Quarto flavor — the trailing space violation is suppressed because the
+        // content looks like inline R code.  Under Pandoc flavor the guard must NOT fire:
+        // `r ` is not special Pandoc syntax, so the trailing space is a genuine MD038 violation.
+        let rule = MD038NoSpaceInCode::new();
+        // Trailing space only (no leading space) — CommonMark does not strip this, so it's a
+        // real MD038 violation.  The `r ` prefix makes it match the Quarto `r expression` guard.
+        let content = "See `r foo ` for details.\n";
+
+        // Under Quarto flavor, the `r expression` guard fires and suppresses the warning.
+        let ctx_quarto = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Quarto, None);
+        let result_quarto = rule.check(&ctx_quarto).unwrap();
+        assert!(
+            result_quarto.is_empty(),
+            "MD038 should suppress trailing-space warning for `r expression` under Quarto: {result_quarto:?}"
+        );
+
+        // Under Pandoc flavor, the guard does NOT fire — trailing space is flagged.
+        let ctx_pandoc = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result_pandoc = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            !result_pandoc.is_empty(),
+            "MD038 should flag trailing space in `r expression` under Pandoc flavor (not Quarto/RMarkdown syntax): {result_pandoc:?}"
+        );
     }
 }

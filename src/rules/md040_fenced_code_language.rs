@@ -265,17 +265,26 @@ impl Rule for MD040FencedCodeLanguage {
             let has_mkdocs_attrs_only =
                 ctx.flavor == crate::config::MarkdownFlavor::MkDocs && is_superfences_attribute(after_fence);
 
-            // Check for Quarto/RMarkdown code chunk syntax: {language} or {language, options}
-            let has_quarto_syntax = ctx.flavor == crate::config::MarkdownFlavor::Quarto
-                && after_fence.starts_with('{')
-                && after_fence.contains('}');
+            // Check for Pandoc/Quarto brace-syntax code chunks.
+            // Two distinct forms are recognized:
+            //   1. `{=html}` raw blocks — Pandoc-compatible (both Pandoc and Quarto accept them).
+            //   2. `{r}` / `{python}` exec chunks — Quarto-only (no leading `=`).
+            let lang_in_braces = after_fence.starts_with('{') && after_fence.ends_with('}');
+            let inner = after_fence
+                .strip_prefix('{')
+                .and_then(|s| s.strip_suffix('}'))
+                .unwrap_or("");
+            let is_pandoc_raw = ctx.flavor.is_pandoc_compatible() && lang_in_braces && inner.starts_with('=');
+            let is_quarto_exec =
+                ctx.flavor == crate::config::MarkdownFlavor::Quarto && lang_in_braces && !inner.starts_with('=');
+            let has_pandoc_or_quarto_syntax = is_pandoc_raw || is_quarto_exec;
 
             // Determine if this block needs a language specification
             // In MkDocs flavor, superfences attributes without language are acceptable
             let needs_language =
                 !has_mkdocs_attrs_only && (block.language.is_empty() || is_superfences_attribute(&block.language));
 
-            if needs_language && !has_quarto_syntax {
+            if needs_language && !has_pandoc_or_quarto_syntax {
                 let (start_line, start_col, end_line, end_col) = calculate_line_range(block.line_idx + 1, line);
 
                 warnings.push(LintWarning {
@@ -313,8 +322,8 @@ impl Rule for MD040FencedCodeLanguage {
                 continue;
             }
 
-            // Skip further checks for special syntax
-            if has_quarto_syntax {
+            // Skip further checks for Pandoc raw blocks and Quarto exec chunks
+            if has_pandoc_or_quarto_syntax {
                 continue;
             }
 
@@ -1267,6 +1276,62 @@ echo hi
             result.len(),
             1,
             "Standard flavor should warn about title= without language"
+        );
+    }
+
+    #[test]
+    fn test_pandoc_raw_block_skipped_under_pandoc_flavor() {
+        // ```{=html} raw blocks are valid Pandoc syntax and should not trigger MD040
+        // under Pandoc flavor.
+        let rule = MD040FencedCodeLanguage::default();
+        let content = "```{=html}\n<div>raw html</div>\n```\n";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD040 should skip Pandoc raw blocks ({{=html}}) under Pandoc flavor: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_pandoc_raw_block_skipped_under_quarto_flavor() {
+        // ```{=html} raw blocks are also valid under Quarto (which is Pandoc-compatible).
+        let rule = MD040FencedCodeLanguage::default();
+        let content = "```{=html}\n<div>raw html</div>\n```\n";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Quarto, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD040 should skip Pandoc raw blocks ({{=html}}) under Quarto flavor: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_quarto_exec_block_skipped_under_quarto_only() {
+        // ```{r} exec chunks are Quarto-specific syntax.
+        // Under Quarto flavor they are recognized and the further language checks (allowlist
+        // etc.) are skipped entirely via `has_pandoc_or_quarto_syntax`.
+        // Under Pandoc flavor, `is_quarto_exec` is false, so the block falls through to
+        // normal MD040 processing.  With default config (no allowlist/denylist) and a
+        // non-empty language string (`{r}`) the rule does NOT flag a "missing language"
+        // warning — it only fires when the language field is blank.
+        let rule = MD040FencedCodeLanguage::default();
+        let content = "```{r}\n1 + 1\n```\n";
+
+        let ctx_quarto = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Quarto, None);
+        let result_quarto = rule.check(&ctx_quarto).unwrap();
+        assert!(
+            result_quarto.is_empty(),
+            "MD040 should skip Quarto exec chunks under Quarto flavor: {result_quarto:?}"
+        );
+
+        // Under Pandoc, `{r}` is a non-empty language string so MD040 does not warn about
+        // a missing language.  The exec-chunk skip is simply not triggered.
+        let ctx_pandoc = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result_pandoc = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            result_pandoc.is_empty(),
+            "MD040 should not produce a 'missing language' warning for non-empty `{{r}}` under Pandoc: {result_pandoc:?}"
         );
     }
 }

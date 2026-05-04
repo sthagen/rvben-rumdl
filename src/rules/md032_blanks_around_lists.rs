@@ -240,7 +240,7 @@ impl MD032BlanksAroundLists {
     /// Transparent elements (HTML comments, Quarto div markers) are skipped,
     /// matching markdownlint-cli behavior.
     fn find_preceding_content(ctx: &crate::lint_context::LintContext, before_line: usize) -> (usize, bool) {
-        let is_quarto = ctx.flavor == crate::config::MarkdownFlavor::Quarto;
+        let is_pandoc = ctx.flavor.is_pandoc_compatible();
         for line_num in (1..before_line).rev() {
             let idx = line_num - 1;
             if let Some(info) = ctx.lines.get(idx) {
@@ -248,8 +248,8 @@ impl MD032BlanksAroundLists {
                 if info.in_html_comment || info.in_mdx_comment {
                     continue;
                 }
-                // Skip Quarto div markers in Quarto flavor - they're transparent
-                if is_quarto {
+                // Skip Pandoc/Quarto div markers in Pandoc-compatible flavor - they're transparent
+                if is_pandoc {
                     let trimmed = info.content(ctx.content).trim();
                     if pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed) {
                         continue;
@@ -269,7 +269,7 @@ impl MD032BlanksAroundLists {
     ///
     /// Transparent elements (HTML comments, Quarto div markers) are skipped.
     fn find_following_content(ctx: &crate::lint_context::LintContext, after_line: usize) -> (usize, bool) {
-        let is_quarto = ctx.flavor == crate::config::MarkdownFlavor::Quarto;
+        let is_pandoc = ctx.flavor.is_pandoc_compatible();
         let num_lines = ctx.lines.len();
         for line_num in (after_line + 1)..=num_lines {
             let idx = line_num - 1;
@@ -278,8 +278,8 @@ impl MD032BlanksAroundLists {
                 if info.in_html_comment || info.in_mdx_comment {
                     continue;
                 }
-                // Skip Quarto div markers in Quarto flavor - they're transparent
-                if is_quarto {
+                // Skip Pandoc/Quarto div markers in Pandoc-compatible flavor - they're transparent
+                if is_pandoc {
                     let trimmed = info.content(ctx.content).trim();
                     if pandoc::is_div_open(trimmed) || pandoc::is_div_close(trimmed) {
                         continue;
@@ -3183,6 +3183,20 @@ Root level lazy continuation.
         assert!(
             warnings.is_empty(),
             "Continuation at each nesting level should produce no warnings. Got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_pandoc_list_after_div_open() {
+        // List immediately after a Pandoc div opening should not require a blank line,
+        // mirroring the Quarto behavior tested in test_quarto_list_after_div_open.
+        let rule = MD032BlanksAroundLists::default();
+        let content = "Content\n\n::: {.callout-note}\n- Item 1\n- Item 2\n:::\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "MD032 should treat Pandoc div marker as transparent before list: {warnings:?}"
         );
     }
 }

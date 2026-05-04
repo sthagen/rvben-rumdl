@@ -196,14 +196,14 @@ impl Rule for MD031BlanksAroundFences {
         let mut warnings = Vec::new();
         let lines = ctx.raw_lines();
         let is_mkdocs = ctx.flavor == crate::config::MarkdownFlavor::MkDocs;
-        let is_quarto = ctx.flavor == crate::config::MarkdownFlavor::Quarto;
+        let is_pandoc = ctx.flavor.is_pandoc_compatible();
 
         // Detect fenced code blocks using pulldown-cmark (handles list-indented fences correctly)
         let fenced_blocks = Self::fenced_block_line_ranges(ctx);
 
-        // Helper to check if a line is a Quarto div marker (opening or closing)
-        let is_quarto_div_marker =
-            |line: &str| -> bool { is_quarto && (pandoc::is_div_open(line) || pandoc::is_div_close(line)) };
+        // Helper to check if a line is a Pandoc/Quarto div marker (opening or closing)
+        let is_pandoc_div_marker =
+            |line: &str| -> bool { is_pandoc && (pandoc::is_div_open(line) || pandoc::is_div_close(line)) };
 
         // Check blank lines around each fenced code block
         for (opening_line, closing_line) in &fenced_blocks {
@@ -217,13 +217,13 @@ impl Rule for MD031BlanksAroundFences {
 
             // Check for blank line before opening fence
             // Skip if right after frontmatter
-            // Skip if right after Quarto div marker (Quarto flavor)
+            // Skip if right after a Pandoc/Quarto div marker in Pandoc-compatible flavor
             // Use is_effectively_empty_line to handle blockquote blank lines (issue #284)
-            let prev_line_is_quarto_marker = *opening_line > 0 && is_quarto_div_marker(lines[*opening_line - 1]);
+            let prev_line_is_pandoc_marker = *opening_line > 0 && is_pandoc_div_marker(lines[*opening_line - 1]);
             if *opening_line > 0
                 && !Self::is_effectively_empty_line(*opening_line - 1, lines, ctx)
                 && !Self::is_right_after_frontmatter(*opening_line, ctx)
-                && !prev_line_is_quarto_marker
+                && !prev_line_is_pandoc_marker
                 && self.should_require_blank_line(*opening_line, lines)
             {
                 let (start_line, start_col, end_line, end_col) =
@@ -247,14 +247,14 @@ impl Rule for MD031BlanksAroundFences {
 
             // Check for blank line after closing fence
             // Allow Kramdown block attributes if configured
-            // Skip if followed by Quarto div marker (Quarto flavor)
+            // Skip if followed by a Pandoc/Quarto div marker in Pandoc-compatible flavor
             // Use is_effectively_empty_line to handle blockquote blank lines (issue #284)
-            let next_line_is_quarto_marker =
-                *closing_line + 1 < lines.len() && is_quarto_div_marker(lines[*closing_line + 1]);
+            let next_line_is_pandoc_marker =
+                *closing_line + 1 < lines.len() && is_pandoc_div_marker(lines[*closing_line + 1]);
             if *closing_line + 1 < lines.len()
                 && !Self::is_effectively_empty_line(*closing_line + 1, lines, ctx)
                 && !is_kramdown_block_attribute(lines[*closing_line + 1])
-                && !next_line_is_quarto_marker
+                && !next_line_is_pandoc_marker
                 && self.should_require_blank_line(*closing_line, lines)
             {
                 let (start_line, start_col, end_line, end_col) =
@@ -1022,5 +1022,19 @@ echo "nested"
             "Should require blank after code block inside div: {warnings:?}"
         );
         assert!(warnings[0].message.contains("after"));
+    }
+
+    #[test]
+    fn test_pandoc_code_block_after_div_open() {
+        // Code block immediately after a Pandoc div opening should not require a blank line,
+        // mirroring the Quarto behavior tested in test_quarto_code_block_after_div_open.
+        let rule = MD031BlanksAroundFences::default();
+        let content = "::: {.callout-note}\n```python\ncode\n```\n:::";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "MD031 should not require blank line after Pandoc div opening: {warnings:?}"
+        );
     }
 }

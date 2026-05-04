@@ -364,9 +364,9 @@ impl MD052ReferenceLinkImages {
                 continue;
             }
 
-            // Skip Quarto/Pandoc citations ([@citation], @citation)
+            // Skip Pandoc/Quarto citations ([@citation], @citation)
             // Citations look like reference links but are bibliography references
-            if ctx.flavor == crate::config::MarkdownFlavor::Quarto && ctx.is_in_citation(link.byte_offset) {
+            if ctx.flavor.is_pandoc_compatible() && ctx.is_in_citation(link.byte_offset) {
                 continue;
             }
 
@@ -1753,5 +1753,19 @@ See [other docs][MissingRef] for more.
             "Reference defined inside nested code fence should not count as a definition"
         );
         assert!(result[0].message.contains("ref-inside"));
+    }
+
+    #[test]
+    fn test_pandoc_flavor_skips_citations() {
+        // Pandoc citations ([@key]) are bibliography references, not undefined reference
+        // links. MD052 should skip them under Pandoc flavor, mirroring the Quarto skip.
+        let rule = MD052ReferenceLinkImages::new();
+        let content = "See [@smith2020] for details.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD052 should skip Pandoc citations under Pandoc flavor: {result:?}"
+        );
     }
 }

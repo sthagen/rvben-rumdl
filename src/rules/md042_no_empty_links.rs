@@ -145,7 +145,7 @@ impl Rule for MD042NoEmptyLinks {
 
         // Check if we're in MkDocs mode from the context
         let mkdocs_mode = ctx.flavor == crate::config::MarkdownFlavor::MkDocs;
-        let quarto_mode = ctx.flavor == crate::config::MarkdownFlavor::Quarto;
+        let pandoc_mode = ctx.flavor.is_pandoc_compatible();
 
         // Use centralized link parsing from LintContext
         for link in &ctx.links {
@@ -161,7 +161,7 @@ impl Rule for MD042NoEmptyLinks {
 
             // Skip Quarto/Pandoc citations ([@citation], @citation)
             // Citations look like reference links but are bibliography references
-            if quarto_mode && ctx.is_in_citation(link.byte_offset) {
+            if pandoc_mode && ctx.is_in_citation(link.byte_offset) {
                 continue;
             }
 
@@ -960,6 +960,21 @@ UnboundLocalError: cannot access local variable 'calls' where it is not associat
             result.len(),
             1,
             "Should still flag [][] as empty in MkDocs mode. Got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_pandoc_flavor_skips_citations() {
+        // Pandoc citations ([@key]) look like reference links but are bibliography references.
+        // MD042 should skip them under Pandoc flavor, mirroring the Quarto skip behavior.
+        use crate::config::MarkdownFlavor;
+        let rule = MD042NoEmptyLinks::new();
+        let content = "See [@smith2020] for details.\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD042 should skip Pandoc citations under Pandoc flavor: {result:?}"
         );
     }
 }
