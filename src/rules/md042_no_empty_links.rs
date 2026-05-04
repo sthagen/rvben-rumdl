@@ -1083,4 +1083,29 @@ UnboundLocalError: cannot access local variable 'calls' where it is not associat
             "MD042 must flag the same empty link under Standard: {result_std:?}"
         );
     }
+
+    /// An empty link whose label *mentions* a citation key (`[see @key]()`) is
+    /// still a link, not a citation, because Pandoc prefers the link parse
+    /// when `[...]` is immediately followed by `(...)`. MD042 must flag the
+    /// empty href under both flavors.
+    #[test]
+    fn test_pandoc_mode_flags_empty_link_with_citation_text() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD042NoEmptyLinks::new();
+        let content = "[see @smith2020]()\n";
+
+        let ctx_pandoc = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result_pandoc = rule.check(&ctx_pandoc).unwrap();
+        assert!(
+            !result_pandoc.is_empty(),
+            "MD042 must flag empty link `[see @key]()` under Pandoc — label is a link, not a citation: {result_pandoc:?}"
+        );
+
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            !result_std.is_empty(),
+            "MD042 must flag the same empty link under Standard: {result_std:?}"
+        );
+    }
 }

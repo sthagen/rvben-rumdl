@@ -209,6 +209,14 @@ static INLINE_CITATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[\s\(\[\{,;:])(@[a-zA-Z0-9_][a-zA-Z0-9_:.#$%&\-+?<>~/]*)").unwrap()
 });
 
+/// Pattern to match the bracketed text portion of a Markdown link.
+///
+/// Matches `[...]` that is *immediately* followed by `(` (inline link) or
+/// `[` (reference link). Capture group 1 is the bracket span, including the
+/// surrounding `[` and `]`. Used by citation detection to exclude `@key`
+/// occurrences appearing inside link labels.
+static LINK_LABEL_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\[[^\]]*\])(?:\(|\[)").unwrap());
+
 /// Quick check if text might contain citations
 #[inline]
 pub fn has_citations(text: &str) -> bool {
@@ -893,22 +901,43 @@ pub fn detect_inline_footnote_ranges(content: &str) -> Vec<ByteRange> {
 }
 
 /// Find all citation ranges in content (byte ranges)
-/// Returns ranges for both bracketed `[@key]` and inline `@key` citations
+/// Returns ranges for both bracketed `[@key]` and inline `@key` citations.
+///
+/// Markdown link labels are excluded: when `[text]` is immediately followed
+/// by `(` (inline link) or `[` (reference link), Pandoc prefers the link
+/// parse over the citation parse, so any `@key` mentioned inside `text`
+/// is not a citation. The link-label scan covers both bracketed-form
+/// matches and free-floating inline `@key` matches.
 pub fn find_citation_ranges(content: &str) -> Vec<ByteRange> {
     let mut ranges = Vec::new();
 
+    // Pre-compute Markdown link-label byte ranges (the `[text]` portion of
+    // `[text](url)` or `[text][ref]`).
+    let link_label_ranges: Vec<(usize, usize)> = LINK_LABEL_PATTERN
+        .captures_iter(content)
+        .filter_map(|c| c.get(1).map(|m| (m.start(), m.end())))
+        .collect();
+
+    let in_link_label = |pos: usize| -> bool { link_label_ranges.iter().any(|&(s, e)| pos >= s && pos < e) };
+
     // Find bracketed citations first (higher priority)
     for mat in BRACKETED_CITATION_PATTERN.find_iter(content) {
+        if in_link_label(mat.start()) {
+            continue;
+        }
         ranges.push(ByteRange {
             start: mat.start(),
             end: mat.end(),
         });
     }
 
-    // Find inline citations (but not inside already-found brackets)
+    // Find inline citations (but not inside already-found brackets or link labels)
     for cap in INLINE_CITATION_PATTERN.captures_iter(content) {
         if let Some(mat) = cap.get(1) {
             let start = mat.start();
+            if in_link_label(start) {
+                continue;
+            }
             // Skip if this is inside a bracketed citation
             if !ranges.iter().any(|r| start >= r.start && start < r.end) {
                 ranges.push(ByteRange { start, end: mat.end() });
@@ -1190,6 +1219,67 @@ Warning content here.
         assert!(
             ranges.is_empty(),
             "Bracketed link text with embedded email and empty href must not be a Pandoc citation: {ranges:?}"
+        );
+    }
+
+    /// A bracketed label whose text mentions a citation key but is *immediately*
+    /// followed by a link target `(...)` is a Markdown link, not a citation.
+    /// Pandoc itself prefers the link interpretation for `[text](url)` over a
+    /// citation parse, even when `text` contains `@key`.
+    #[test]
+    fn test_bracketed_text_followed_by_inline_link_not_citation() {
+        let content = "[see @smith2020](#missing)";
+        let ranges = find_citation_ranges(content);
+        assert!(
+            ranges.is_empty(),
+            "Bracketed text followed by `(...)` is a link, not a citation: {ranges:?}"
+        );
+    }
+
+    /// Same disambiguation when the link target is empty: still a link.
+    #[test]
+    fn test_bracketed_text_followed_by_empty_inline_link_not_citation() {
+        let content = "[see @smith2020]()";
+        let ranges = find_citation_ranges(content);
+        assert!(
+            ranges.is_empty(),
+            "Bracketed text followed by `()` is a link with empty href, not a citation: {ranges:?}"
+        );
+    }
+
+    /// Reference-style links `[text][ref]` are also links — the bracketed
+    /// label `[text]` must not be classified as a citation just because it
+    /// contains `@key`.
+    #[test]
+    fn test_bracketed_text_followed_by_reference_link_not_citation() {
+        let content = "[see @smith2020][ref]";
+        let ranges = find_citation_ranges(content);
+        assert!(
+            ranges.is_empty(),
+            "Bracketed text followed by `[ref]` is a reference link, not a citation: {ranges:?}"
+        );
+    }
+
+    /// Standalone bracketed citations remain citations: nothing immediately
+    /// follows the closing `]`, so the link disambiguation does not apply.
+    #[test]
+    fn test_standalone_bracketed_citation_still_detected() {
+        let content = "See [see @smith2020] for details.";
+        let ranges = find_citation_ranges(content);
+        assert!(
+            ranges.iter().any(|r| &content[r.start..r.end] == "[see @smith2020]"),
+            "Standalone bracketed citation must still be detected: {ranges:?}"
+        );
+    }
+
+    /// Citation followed by sentence punctuation remains a citation.
+    #[test]
+    fn test_bracketed_citation_followed_by_punctuation_still_detected() {
+        let content = "Note [@smith2020].";
+        let ranges = find_citation_ranges(content);
+        assert!(
+            ranges.iter().any(|r| &content[r.start..r.end] == "[@smith2020]"),
+            "Bracketed citation followed by `.` must still be detected: {ranges:?}"
         );
     }
 
