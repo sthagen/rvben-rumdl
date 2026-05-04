@@ -200,6 +200,37 @@ pub fn has_citations(text: &str) -> bool {
     text.contains('@')
 }
 
+// ============================================================================
+// Inline Footnote Support
+// ============================================================================
+//
+// Pandoc inline footnote syntax: ^[footnote text]
+//
+// The `^` must not be preceded by `!` (image) or by a word character
+// (superscript syntax: `2^10^`). The footnote body extends to the first
+// unescaped `]`; nested brackets are not supported in this detector.
+
+/// Pattern for Pandoc inline footnotes: `^[note text]`.
+/// The `^` must not be preceded by `!` (which would be an image) or by
+/// alphanumeric (which would be a superscript: `2^10^`).
+static INLINE_FOOTNOTE_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|[^\w!])(\^\[[^\]]*\])").unwrap());
+
+/// Detect Pandoc inline footnote ranges (`^[note text]`).
+///
+/// Returns byte ranges covering the entire `^[...]` span. Intended for rules that
+/// process bracket-like syntax to skip Pandoc inline footnotes.
+pub fn detect_inline_footnote_ranges(content: &str) -> Vec<ByteRange> {
+    let mut ranges = Vec::new();
+    for caps in INLINE_FOOTNOTE_PATTERN.captures_iter(content) {
+        let m = caps.get(1).unwrap();
+        ranges.push(ByteRange {
+            start: m.start(),
+            end: m.end(),
+        });
+    }
+    ranges
+}
+
 /// Find all citation ranges in content (byte ranges)
 /// Returns ranges for both bracketed `[@key]` and inline `@key` citations
 pub fn find_citation_ranges(content: &str) -> Vec<ByteRange> {
@@ -474,5 +505,41 @@ Warning content here.
                     s.contains("example.com")
                 })
         );
+    }
+
+    #[test]
+    fn test_detect_inline_footnotes() {
+        let content = "See ^[a quick note] here.\nAnd ^[another one] too.\n";
+        let ranges = detect_inline_footnote_ranges(content);
+        assert_eq!(ranges.len(), 2);
+        // First footnote
+        let first_start = content.find("^[").unwrap();
+        let first_end = content[first_start..].find(']').unwrap() + first_start + 1;
+        assert_eq!(ranges[0].start, first_start);
+        assert_eq!(ranges[0].end, first_end);
+        // Second footnote
+        let second_start = content[first_end..].find("^[").unwrap() + first_end;
+        let second_end = content[second_start..].find(']').unwrap() + second_start + 1;
+        assert_eq!(ranges[1].start, second_start);
+        assert_eq!(ranges[1].end, second_end);
+    }
+
+    #[test]
+    fn test_inline_footnote_with_brackets_inside() {
+        // Inline footnotes do not nest; a `]` inside terminates the footnote.
+        // This documents the chosen behavior. Pandoc itself supports nesting via
+        // backslash-escapes; rumdl currently treats the first unescaped `]` as
+        // the terminator.
+        let content = "Note ^[ref to [other] thing] here.\n";
+        let ranges = detect_inline_footnote_ranges(content);
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[test]
+    fn test_inline_footnote_does_not_match_image_or_link() {
+        // `![alt]` is an image, not a footnote.
+        let content = "An image ![alt](url) and a link [txt](url).\n";
+        let ranges = detect_inline_footnote_ranges(content);
+        assert_eq!(ranges.len(), 0);
     }
 }

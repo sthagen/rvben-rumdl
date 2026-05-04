@@ -1433,3 +1433,25 @@ fn test_pandoc_flavor_detects_citations() {
     let pos = content.find("[@smith2020]").unwrap() + 1;
     assert!(ctx.is_in_citation(pos), "Pandoc flavor should detect citation ranges");
 }
+
+#[test]
+fn test_pandoc_flavor_detects_inline_footnotes() {
+    let content = "Text ^[note here] more.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("^[").unwrap() + 1;
+    assert!(
+        ctx.is_in_inline_footnote(pos),
+        "Pandoc flavor should detect inline footnote ranges"
+    );
+}
+
+#[test]
+fn test_standard_flavor_skips_inline_footnotes() {
+    let content = "Text ^[note here] more.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("^[").unwrap() + 1;
+    assert!(
+        !ctx.is_in_inline_footnote(pos),
+        "Standard flavor should not detect inline footnote ranges"
+    );
+}

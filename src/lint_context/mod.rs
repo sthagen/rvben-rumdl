@@ -87,6 +87,7 @@ pub struct LintContext<'a> {
     mdx_comment_ranges: Vec<(usize, usize)>, // Pre-computed MDX comment ranges ({/* ... */})
     citation_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto citation ranges (@key, [@key])
     pandoc_div_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto div block ranges (::: ... :::)
+    inline_footnote_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc inline footnote ranges (^[...])
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -587,6 +588,15 @@ impl<'a> LintContext<'a> {
             }
         });
 
+        // Pre-compute Pandoc inline footnote ranges for Pandoc-compatible flavors
+        let inline_footnote_ranges = profile_section!("Inline footnote ranges", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::detect_inline_footnote_ranges(content)
+            } else {
+                Vec::new()
+            }
+        });
+
         // Pre-compute Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
         let shortcode_ranges = profile_section!("Shortcode ranges", profile, {
             use crate::utils::regex_cache::HUGO_SHORTCODE_REGEX;
@@ -634,6 +644,7 @@ impl<'a> LintContext<'a> {
             mdx_comment_ranges,
             citation_ranges,
             pandoc_div_ranges,
+            inline_footnote_ranges,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1044,6 +1055,14 @@ impl<'a> LintContext<'a> {
     pub fn is_in_div_block(&self, byte_pos: usize) -> bool {
         let idx = self.pandoc_div_ranges.partition_point(|r| r.start <= byte_pos);
         idx > 0 && byte_pos < self.pandoc_div_ranges[idx - 1].end
+    }
+
+    /// Check if a byte position is within a Pandoc inline footnote (`^[note text]`).
+    /// Active for Pandoc-compatible flavors. O(log n).
+    #[inline]
+    pub fn is_in_inline_footnote(&self, byte_pos: usize) -> bool {
+        let idx = self.inline_footnote_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.inline_footnote_ranges[idx - 1].end
     }
 
     /// Check if a byte position is within a Hugo/Quarto shortcode ({{< ... >}} or {{% ... %}}). O(log n).
