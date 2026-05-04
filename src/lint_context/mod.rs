@@ -98,6 +98,7 @@ pub struct LintContext<'a> {
     pipe_table_caption_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc pipe-table caption ranges (: caption)
     pandoc_metadata_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc YAML metadata block ranges (--- ... --- or ...)
     grid_table_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc grid-table ranges (+---+---+)
+    multi_line_table_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc multi-line table ranges
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -697,6 +698,15 @@ impl<'a> LintContext<'a> {
             }
         });
 
+        // Pre-compute Pandoc multi-line table ranges for Pandoc-compatible flavors
+        let multi_line_table_ranges = profile_section!("Multi-line table ranges", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::detect_multi_line_table_ranges(content)
+            } else {
+                Vec::new()
+            }
+        });
+
         // Pre-compute Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
         let shortcode_ranges = profile_section!("Shortcode ranges", profile, {
             use crate::utils::regex_cache::HUGO_SHORTCODE_REGEX;
@@ -755,6 +765,7 @@ impl<'a> LintContext<'a> {
             pipe_table_caption_ranges,
             pandoc_metadata_ranges,
             grid_table_ranges,
+            multi_line_table_ranges,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1247,6 +1258,14 @@ impl<'a> LintContext<'a> {
     pub fn is_in_grid_table(&self, byte_pos: usize) -> bool {
         let idx = self.grid_table_ranges.partition_point(|r| r.start <= byte_pos);
         idx > 0 && byte_pos < self.grid_table_ranges[idx - 1].end
+    }
+
+    /// Returns true if `byte_pos` falls inside a Pandoc multi-line table.
+    /// Active for Pandoc-compatible flavors. O(log n).
+    #[inline]
+    pub fn is_in_multi_line_table(&self, byte_pos: usize) -> bool {
+        let idx = self.multi_line_table_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.multi_line_table_ranges[idx - 1].end
     }
 
     /// Returns true if `link_text` slugifies to a heading present in the document.

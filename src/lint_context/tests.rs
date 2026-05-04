@@ -1751,3 +1751,69 @@ fn test_standard_flavor_skips_grid_table() {
     let pos = content.find("a").unwrap();
     assert!(!ctx.is_in_grid_table(pos));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_multi_line_table() {
+    use crate::config::MarkdownFlavor;
+    let content = "\
+-------------------------------------------------------------
+ Centered   Default           Right Left
+  Header    Aligned         Aligned Aligned
+----------- ------- --------------- -------------------------
+   First    row                12.0 Example of a row that
+                                    spans multiple lines.
+
+  Second    row                 5.0 Here's another one. Note
+                                    the blank line between
+                                    rows.
+-------------------------------------------------------------
+";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    // The entire content should be detected as a single multi-line table.
+    let first_pos = content.find("First").unwrap();
+    let second_pos = content.find("Second").unwrap();
+    assert!(ctx.is_in_multi_line_table(first_pos));
+    assert!(ctx.is_in_multi_line_table(second_pos));
+    // The detection covers byte 0 (the top border) through content.len().
+    assert!(ctx.is_in_multi_line_table(0));
+}
+
+#[test]
+fn test_pandoc_flavor_multi_line_table_excludes_surrounding_text() {
+    use crate::config::MarkdownFlavor;
+    let content = "\
+Before text.
+
+-------------------------------------------------------------
+ Centered   Default           Right Left
+  Header    Aligned         Aligned Aligned
+----------- ------- --------------- -------------------------
+   First    row                12.0 Example.
+-------------------------------------------------------------
+
+After text.
+";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let before_pos = content.find("Before").unwrap();
+    let after_pos = content.find("After").unwrap();
+    let inside_pos = content.find("First").unwrap();
+    assert!(!ctx.is_in_multi_line_table(before_pos));
+    assert!(!ctx.is_in_multi_line_table(after_pos));
+    assert!(ctx.is_in_multi_line_table(inside_pos));
+}
+
+#[test]
+fn test_standard_flavor_skips_multi_line_table() {
+    use crate::config::MarkdownFlavor;
+    let content = "\
+-------------------------------------------------------------
+ Centered   Default           Right Left
+  Header    Aligned         Aligned Aligned
+----------- ------- --------------- -------------------------
+   First    row                12.0 Example.
+-------------------------------------------------------------
+";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("First").unwrap();
+    assert!(!ctx.is_in_multi_line_table(pos));
+}

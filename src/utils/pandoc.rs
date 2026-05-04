@@ -756,6 +756,110 @@ pub fn detect_grid_table_ranges(content: &str) -> Vec<ByteRange> {
     ranges
 }
 
+// ============================================================================
+// Multi-line Table Support
+// ============================================================================
+//
+// Pandoc `multiline_tables` extension: a block whose column widths are declared
+// by an underline row of dashes-separated-by-spaces (MULTI_LINE_UNDERLINE), with
+// an optional top-border and a mandatory closing solid-dash row (MULTI_LINE_BORDER).
+// The header line immediately precedes the underline row.
+
+/// Pattern for a multi-line table column-width underline row.
+/// Matches two or more runs of dashes separated by spaces, e.g.:
+/// `----------- ------- --------------- -------------------------`
+static MULTI_LINE_UNDERLINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^-{2,}(?:\s+-{2,})+\s*$").unwrap());
+
+/// Pattern for a multi-line table solid border row (≥10 dashes).
+/// Used as both an optional top border and the mandatory closing border.
+static MULTI_LINE_BORDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^-{10,}\s*$").unwrap());
+
+/// Detect Pandoc multi-line table ranges.
+///
+/// A multi-line table is recognised by an underline row (dashes separated by
+/// spaces, ≥2 columns) immediately following a non-empty header line. The table
+/// extends to the next solid-dash border row (≥10 dashes). An optional solid
+/// border may appear before the header as well.
+///
+/// Iterates with `split_inclusive('\n')` so byte ranges remain accurate for
+/// content without a trailing newline and for CRLF line endings.
+pub fn detect_multi_line_table_ranges(content: &str) -> Vec<ByteRange> {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut line_offsets: Vec<usize> = Vec::new();
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        line_offsets.push(offset);
+        lines.push(line);
+        offset += line.len();
+    }
+    line_offsets.push(offset);
+
+    fn line_body(line: &str) -> &str {
+        line.trim_end_matches('\n').trim_end_matches('\r')
+    }
+    fn is_underline(line: &str) -> bool {
+        MULTI_LINE_UNDERLINE.is_match(line_body(line))
+    }
+    fn is_border(line: &str) -> bool {
+        MULTI_LINE_BORDER.is_match(line_body(line))
+    }
+
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        // Look for an underline row whose previous line is a non-empty header.
+        if i >= 1 && is_underline(lines[i]) && !line_body(lines[i - 1]).is_empty() {
+            // Walk backward from i-1 to find the first line of the header block.
+            // The header may span multiple lines; keep going back while lines are
+            // non-empty and not themselves borders or underlines.
+            let mut header_start = i - 1;
+            while header_start > 0
+                && !line_body(lines[header_start - 1]).is_empty()
+                && !is_border(lines[header_start - 1])
+                && !is_underline(lines[header_start - 1])
+            {
+                header_start -= 1;
+            }
+
+            // Optionally include a solid border that precedes the header block.
+            let start_line = if header_start > 0 && is_border(lines[header_start - 1]) {
+                header_start - 1
+            } else {
+                header_start
+            };
+
+            // Walk forward from the line after the underline to find the closing border.
+            let mut j = i + 1;
+            let mut end_line: Option<usize> = None;
+            while j < lines.len() {
+                if is_border(lines[j]) {
+                    // Closing solid-dash border found.
+                    end_line = Some(j);
+                    break;
+                } else if j > i + 1 && is_underline(lines[j]) {
+                    // Another column-width underline (second header section?):
+                    // the previous line is the last body line.
+                    end_line = Some(j - 1);
+                    break;
+                }
+                j += 1;
+            }
+
+            if let Some(end) = end_line {
+                ranges.push(ByteRange {
+                    start: line_offsets[start_line],
+                    end: line_offsets[end + 1],
+                });
+                i = end + 1;
+                continue;
+            }
+            // No closing border found — skip this candidate and keep walking.
+        }
+        i += 1;
+    }
+    ranges
+}
+
 /// Detect Pandoc inline footnote ranges (`^[note text]`).
 ///
 /// Returns byte ranges covering the entire `^[...]` span. Intended for rules that
@@ -1595,5 +1699,111 @@ After.
         let content = "+---+\n+---+\n";
         let ranges = detect_grid_table_ranges(content);
         assert_eq!(ranges.len(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-line table tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_detect_multi_line_table() {
+        let content = "\
+-------------------------------------------------------------
+ Centered   Default           Right Left
+  Header    Aligned         Aligned Aligned
+----------- ------- --------------- -------------------------
+   First    row                12.0 Example of a row that
+                                    spans multiple lines.
+
+  Second    row                 5.0 Here's another one. Note
+                                    the blank line between
+                                    rows.
+-------------------------------------------------------------
+";
+        let ranges = detect_multi_line_table_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_simple_dash_header_underline_only_does_not_match() {
+        // The dash line has length 8 < 10 so it is not a MULTI_LINE_BORDER,
+        // and it is not a MULTI_LINE_UNDERLINE (only one dash run — no spaces).
+        let content = "Some text\n--------\nMore text\n";
+        let ranges = detect_multi_line_table_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_multi_line_table_no_trailing_newline() {
+        // The last line has no trailing newline; end must equal content.len().
+        let content = "\
+-------------------------------------------------------------
+ Centered   Default           Right Left
+  Header    Aligned         Aligned Aligned
+----------- ------- --------------- -------------------------
+   First    row                12.0 Example of a row that
+                                    spans multiple lines.
+
+  Second    row                 5.0 Here's another one. Note
+                                    the blank line between
+                                    rows.
+-------------------------------------------------------------";
+        let ranges = detect_multi_line_table_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_multi_line_table_crlf() {
+        // CRLF line endings must produce correct byte offsets.
+        let content = "\
+-------------------------------------------------------------\r\n\
+ Centered   Default           Right Left\r\n\
+  Header    Aligned         Aligned Aligned\r\n\
+----------- ------- --------------- -------------------------\r\n\
+   First    row                12.0 Example of a row that\r\n\
+                                    spans multiple lines.\r\n\
+\r\n\
+  Second    row                 5.0 Here's another one. Note\r\n\
+                                    the blank line between\r\n\
+                                    rows.\r\n\
+-------------------------------------------------------------\r\n";
+        let ranges = detect_multi_line_table_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_multi_line_table_unterminated_skipped() {
+        // Header + underline but no closing border — must return 0 ranges.
+        let content = "\
+ Centered   Default
+  Header    Aligned
+----------- -------
+   First    row
+   Second   row
+";
+        let ranges = detect_multi_line_table_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_multi_line_table_no_top_border() {
+        // Valid table with no top border: header line immediately followed by
+        // the column underline, then body rows, then closing border.
+        let content = "\
+  Centered   Default           Right Left
+----------- ------- --------------- -------------------------
+   First    row                12.0 Example
+  Second    row                 5.0 Another
+-------------------------------------------------------------
+";
+        let ranges = detect_multi_line_table_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, content.len());
     }
 }
