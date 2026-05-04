@@ -11,7 +11,7 @@ rumdl supports multiple Markdown flavors to accommodate different documentation 
 | [mkdocs](flavors/mkdocs.md)     | MkDocs / Material for MkDocs         | MD024, MD031, MD033, MD038, MD040, MD042, MD046, MD049, MD050, MD052, MD056                                                  |
 | [mdx](flavors/mdx.md)           | MDX (JSX in Markdown)                | MD013, MD033, MD037, MD039, MD044, MD049                                                                                     |
 | [obsidian](flavors/obsidian.md) | Obsidian knowledge base              | MD011, MD012, MD018, MD028, MD033, MD034, MD037, MD038, MD044, MD049, MD061, MD064, MD069                                    |
-| [pandoc](flavors/pandoc.md)     | Pandoc Markdown                      | MD022, MD029, MD031, MD032, MD034, MD037, MD038, MD040, MD042, MD051, MD052                                                  |
+| [pandoc](flavors/pandoc.md)     | Pandoc Markdown                      | MD022, MD029, MD031, MD032, MD034, MD037, MD040, MD042, MD051, MD052                                                         |
 | [quarto](flavors/quarto.md)     | Quarto / RMarkdown                   | MD022, MD029, MD031, MD032, MD034, MD037, MD038, MD040, MD042, MD049, MD050, MD051, MD052                                    |
 | [kramdown](flavors/kramdown.md) | Jekyll / kramdown                    | MD022, MD041, MD051                                                                                                          |
 

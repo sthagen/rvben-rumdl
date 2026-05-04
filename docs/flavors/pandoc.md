@@ -147,7 +147,9 @@ H~2~O and 2^10^.
 Use `print()`{.python} to display.
 ```
 
-**Affected rules**: MD038 (no space in code)
+The attribute block lives outside the code span, so MD038 still flags
+genuine leading or trailing whitespace inside the backticks
+(e.g. `` ` print()`{.python} ``).
 
 ### Pipe Tables with Captions
 
@@ -222,7 +224,6 @@ author: Jane Doe
 | MD032 | Blanks around lists         | Treat `:::` div markers as transparent                               |
 | MD034 | Flag all bare URLs          | Skip URLs inside line blocks and metadata blocks                     |
 | MD037 | Check emphasis spacing      | Skip bracketed spans and sub/superscripts                            |
-| MD038 | Check all code spans        | Skip trailing `{...}` after inline code                              |
 | MD040 | Standard language detection | Recognize `{=format}` raw-format declarations                        |
 | MD042 | Flag empty links            | Skip citations, footnotes, example refs, implicit header refs        |
 | MD051 | Validate link fragments     | Resolve fragments against Pandoc heading slugs                       |

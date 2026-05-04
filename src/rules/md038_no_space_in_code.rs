@@ -222,7 +222,15 @@ impl MD038NoSpaceInCode {
         let next_char = ctx.content[code_span.byte_end..].chars().next();
         let prev_char = ctx.content[..code_span.byte_offset].chars().next_back();
 
-        (content.ends_with(char::is_whitespace) && next_char.is_some_and(|c| !c.is_whitespace()))
+        // A Pandoc inline code attribute (`code`{.lang}) attached to the closing
+        // backtick is structural syntax, not a nested-backtick illustration.
+        // It must not silence inner-whitespace violations on the code span.
+        let trailing_neighbor_is_pandoc_attr =
+            ctx.flavor.is_pandoc_compatible() && ctx.is_in_inline_code_attr(code_span.byte_end);
+
+        (content.ends_with(char::is_whitespace)
+            && next_char.is_some_and(|c| !c.is_whitespace())
+            && !trailing_neighbor_is_pandoc_attr)
             || (content.starts_with(char::is_whitespace) && prev_char.is_some_and(|c| !c.is_whitespace()))
     }
 }
@@ -317,16 +325,6 @@ impl Rule for MD038NoSpaceInCode {
                     && trimmed.len() > 1
                     && trimmed.chars().nth(1).is_some_and(char::is_whitespace)
                 {
-                    continue;
-                }
-
-                // Skip Pandoc inline code attribute syntax: `code`{.lang}
-                // When a code span is immediately followed by a Pandoc attribute block, any
-                // leading space belongs to the attribute-adjacent position, not a spacing error.
-                // `inline_code_attr_ranges` covers the `{...}` bytes; `byte_end` points to the
-                // first byte after the closing backtick, which is the opening `{` when an
-                // attribute block is directly attached.
-                if ctx.flavor.is_pandoc_compatible() && ctx.is_in_inline_code_attr(code_span.byte_end) {
                     continue;
                 }
 
@@ -1456,40 +1454,38 @@ Regular code: `function test() {}`
         );
     }
 
-    /// Pandoc inline code attributes (`` `code`{.lang} ``) must not be flagged by MD038.
-    ///
-    /// When a code span is immediately followed by a Pandoc attribute block `{.lang}`, any
-    /// leading space in the code span is attribute-adjacent syntax, not a user spacing error.
-    /// A code span with a leading space attached to a Pandoc attribute block
-    /// must not be flagged under Pandoc-compatible flavors.
+    /// Pandoc inline code attribute syntax (`` `code`{.lang} ``) does not exempt
+    /// the code span from MD038's inner-whitespace check: the attribute block lives
+    /// outside the closing backtick, so a leading space inside the backticks is a
+    /// real spacing violation regardless of any attached attribute.
     #[test]
-    fn test_pandoc_inline_code_attr_leading_space_suppressed() {
+    fn test_pandoc_inline_code_attr_does_not_suppress_leading_space() {
         let rule = MD038NoSpaceInCode::new();
         let content = "Use ` print()`{.python} for output.\n";
         let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
         let result = rule.check(&ctx).unwrap();
         assert!(
-            result.is_empty(),
-            "MD038 should not flag leading space in `code`{{.lang}} under Pandoc: {result:?}"
+            !result.is_empty(),
+            "MD038 must flag leading space inside `code`{{.lang}} under Pandoc — the attribute is outside the span: {result:?}"
         );
     }
 
-    /// A code span with a trailing space attached to a Pandoc attribute block
-    /// must not be flagged under Pandoc-compatible flavors.
+    /// Trailing space inside an attributed code span is also a real violation
+    /// under Pandoc — the `{.lang}` attribute does not absorb whitespace from
+    /// inside the backticks.
     #[test]
-    fn test_pandoc_inline_code_attr_trailing_space_suppressed() {
+    fn test_pandoc_inline_code_attr_does_not_suppress_trailing_space() {
         let rule = MD038NoSpaceInCode::new();
         let content = "Use `print() `{.python} for output.\n";
         let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
         let result = rule.check(&ctx).unwrap();
         assert!(
-            result.is_empty(),
-            "MD038 should not flag trailing space in `code`{{.lang}} under Pandoc: {result:?}"
+            !result.is_empty(),
+            "MD038 must flag trailing space inside `code`{{.lang}} under Pandoc — the attribute is outside the span: {result:?}"
         );
     }
 
-    /// Cross-flavor regression: the same leading-space content MUST still be
-    /// flagged under Standard flavor, proving the Pandoc guard does real work.
+    /// Cross-flavor parity: Standard flavor still flags the same content.
     #[test]
     fn test_standard_still_flags_leading_space_with_attr_syntax() {
         let rule = MD038NoSpaceInCode::new();
@@ -1498,7 +1494,21 @@ Regular code: `function test() {}`
         let result = rule.check(&ctx).unwrap();
         assert!(
             !result.is_empty(),
-            "MD038 should flag leading space in code span under Standard flavor (guard inactive): {result:?}"
+            "MD038 should flag leading space in code span under Standard flavor: {result:?}"
+        );
+    }
+
+    /// Clean attributed code spans (no inner whitespace) must still pass under
+    /// Pandoc — the no-whitespace fast path handles them, no special guard needed.
+    #[test]
+    fn test_pandoc_inline_code_attr_clean_span_not_flagged() {
+        let rule = MD038NoSpaceInCode::new();
+        let content = "Use `print()`{.python} for output.\n";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD038 must not flag a clean attributed code span under Pandoc: {result:?}"
         );
     }
 }
