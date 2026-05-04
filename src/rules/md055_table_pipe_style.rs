@@ -726,4 +726,124 @@ mod tests {
         let rule = MD055TablePipeStyle::new("leading_and_trailing".to_string());
         assert_fix_roundtrip(&rule, "| H1 | H2 |\n|---|---|\n| a | b |");
     }
+
+    // === Pandoc construct reachability tests ===
+    //
+    // These tests document that MD055 does not flag Pandoc-specific constructs
+    // (grid tables, multi-line tables, line blocks, pipe-table captions) because
+    // `ctx.table_blocks` excludes them at the source:
+    //
+    // - Grid table delimiters use `+---+---+` (no `|`), so `is_delimiter_row`
+    //   returns false and no `TableBlock` is created.
+    // - Multi-line table separators (`----------`) have no `|`, same exclusion.
+    // - Line blocks (`| First line`) end without `|`, so `is_potential_table_row`
+    //   requires `valid_parts >= 2` but finds only 1 — excluded.
+    // - Pipe-table captions (`: caption`) have no `|` — excluded.
+    //
+    // No production guard is needed. These tests ensure that if `find_table_blocks`
+    // ever changes to include these constructs, the failure is visible.
+
+    #[test]
+    fn md055_pandoc_grid_tables_not_flagged() {
+        let rule = MD055TablePipeStyle::new("leading_and_trailing".to_string());
+        let content = "\
++---+---+
+| a | b |
++===+===+
+| 1 | 2 |
++---+---+
+";
+        // Under Pandoc: grid tables are excluded from table_blocks (delimiter rows
+        // use `+` not `|`), so no warnings are emitted.
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD055 should not flag Pandoc grid tables (excluded by table_blocks): {result:?}"
+        );
+
+        // Under Standard: same content also produces no warnings because the
+        // `+---+---+` lines are not recognized as pipe-table delimiters.
+        let ctx_std = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD055 should not flag grid-table-like content under Standard either: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md055_pandoc_multi_line_tables_not_flagged() {
+        let rule = MD055TablePipeStyle::new("leading_and_trailing".to_string());
+        // Multi-line table (Pandoc extension): separator line has no `|`.
+        let content = "\
+--------- ----------- ------
+Header 1   Header 2   Header 3
+--------- ----------- ------
+Cell 1     Cell 2     Cell 3
+--------- ----------- ------
+";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD055 should not flag Pandoc multi-line tables: {result:?}"
+        );
+
+        let ctx_std = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD055 should not flag multi-line table content under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md055_pandoc_line_blocks_not_flagged() {
+        let rule = MD055TablePipeStyle::new("leading_and_trailing".to_string());
+        // Pandoc line blocks: `| text` that starts with `|` but does not end with `|`.
+        // is_potential_table_row requires valid_parts >= 2 for non-outer-piped lines.
+        let content = "| First line\n| Second line\n";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD055 should not treat Pandoc line blocks as tables: {result:?}"
+        );
+
+        let ctx_std = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD055 should not treat line-block-like content as tables under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md055_pandoc_pipe_table_captions_not_flagged() {
+        let rule = MD055TablePipeStyle::new("leading_and_trailing".to_string());
+        // Pipe-table captions (`: caption`) have no `|`, so they are never included
+        // in table_blocks.
+        let content = "\
+| H1 | H2 |
+|----|-----|
+| a  | b  |
+
+: My table caption
+";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD055 should not flag the pipe-table caption line: {result:?}"
+        );
+
+        // Under Standard: same table rows are correctly checked; caption line is ignored.
+        let ctx_std = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD055 already-valid table with caption should have no warnings under Standard: {result_std:?}"
+        );
+    }
 }

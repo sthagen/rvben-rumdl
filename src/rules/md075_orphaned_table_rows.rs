@@ -1927,4 +1927,123 @@ Notes ||
             prop_assert_eq!(rule.fix(&ctx).unwrap(), content);
         }
     }
+
+    // === Pandoc construct reachability tests ===
+    //
+    // These tests document that MD075 does not flag Pandoc-specific constructs
+    // because `ctx.table_blocks` (used by detect_orphaned_rows and
+    // detect_table_continuation_rows) and `is_table_row_line` (used by
+    // detect_headerless_tables) both exclude them:
+    //
+    // - Grid table delimiters use `+---+---+` (no `|`), so `is_delimiter_row`
+    //   returns false and no `TableBlock` is created. The interior rows
+    //   (`| a | b |`) do look like table rows but since no table_block exists
+    //   for them, they may trigger the "headerless" check — but the preceding
+    //   `+---+---+` line is not a delimiter row, so no table context is built.
+    // - Multi-line table separators have no `|`, same exclusion.
+    // - Line blocks (`| First line`) end without `|`; `is_potential_table_row`
+    //   requires `valid_parts >= 2` for non-outer-piped lines (only 1 found).
+    // - Pipe-table captions (`: caption`) have no `|` — excluded.
+    //
+    // If `find_table_blocks` ever changes to include these constructs, these
+    // tests will surface that.
+
+    #[test]
+    fn md075_pandoc_grid_tables_not_flagged() {
+        let rule = MD075OrphanedTableRows::default();
+        let content = "\
++---+---+
+| a | b |
++===+===+
+| 1 | 2 |
++---+---+
+";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD075 should not flag Pandoc grid tables: {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD075 should not flag grid-table-like content under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md075_pandoc_multi_line_tables_not_flagged() {
+        let rule = MD075OrphanedTableRows::default();
+        let content = "\
+--------- -----------
+Header 1   Header 2
+--------- -----------
+Cell 1     Cell 2
+--------- -----------
+";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD075 should not flag Pandoc multi-line tables: {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD075 should not flag multi-line table content under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md075_pandoc_line_blocks_not_flagged() {
+        let rule = MD075OrphanedTableRows::default();
+        // Pandoc line blocks: `| text` lines without trailing `|`.
+        // is_potential_table_row requires valid_parts >= 2 for non-outer-piped
+        // lines, so line blocks with a single cell are excluded.
+        let content = "| First line\n| Second line\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD075 should not treat Pandoc line blocks as orphaned table rows: {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD075 should not treat line-block-like content as orphaned rows under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md075_pandoc_pipe_table_captions_not_flagged() {
+        let rule = MD075OrphanedTableRows::default();
+        // Pipe-table captions (`: caption`) have no `|` — they are not pipe rows
+        // and cannot appear in table_blocks or trigger is_table_row_line.
+        let content = "\
+| H1 | H2 |
+|----|-----|
+| a  | b  |
+
+: My table caption
+";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD075 should not flag the pipe-table caption line as orphaned: {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD075 table with caption — caption not a pipe row under Standard: {result_std:?}"
+        );
+    }
 }

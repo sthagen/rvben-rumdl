@@ -2569,4 +2569,118 @@ style = "aligned"
         let fixed = rule.fix(&ctx).unwrap();
         assert_eq!(fixed, content, "Display-aligned CJK table should not be reformatted");
     }
+
+    // === Pandoc construct reachability tests ===
+    //
+    // These tests document that MD060 does not flag Pandoc-specific constructs
+    // because `ctx.table_blocks` excludes them at the source:
+    //
+    // - Grid table delimiters use `+---+---+` (no `|`), so `is_delimiter_row`
+    //   returns false and no `TableBlock` is created.
+    // - Multi-line table separators have no `|`, same exclusion.
+    // - Line blocks (`| First line`) end without `|`; `is_potential_table_row`
+    //   requires `valid_parts >= 2` for non-outer-piped lines (only 1 found).
+    // - Pipe-table captions (`: caption`) have no `|` — excluded.
+    //
+    // No production guard is needed. If `find_table_blocks` ever changes to
+    // include these constructs, these tests will surface that.
+
+    #[test]
+    fn md060_pandoc_grid_tables_not_flagged() {
+        let rule = MD060TableFormat::new(true, "aligned".to_string());
+        let content = "\
++---+---+
+| a | b |
++===+===+
+| 1 | 2 |
++---+---+
+";
+        // Grid table delimiters (`+===+===+`) contain no `|`, so `is_delimiter_row`
+        // returns false and no TableBlock is created — MD060 has nothing to check.
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD060 should not flag Pandoc grid tables (excluded by table_blocks): {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD060 should not flag grid-table-like content under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md060_pandoc_multi_line_tables_not_flagged() {
+        let rule = MD060TableFormat::new(true, "aligned".to_string());
+        let content = "\
+--------- -----------
+Header 1   Header 2
+--------- -----------
+Cell 1     Cell 2
+--------- -----------
+";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD060 should not flag Pandoc multi-line tables: {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD060 should not flag multi-line table content under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md060_pandoc_line_blocks_not_flagged() {
+        let rule = MD060TableFormat::new(true, "aligned".to_string());
+        // Pandoc line blocks start with `|` but do not end with `|`.
+        let content = "| First line\n| Second line\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD060 should not treat Pandoc line blocks as tables: {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD060 should not treat line-block-like content as tables under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md060_pandoc_pipe_table_captions_not_flagged() {
+        let rule = MD060TableFormat::new(true, "aligned".to_string());
+        // Pipe-table captions (`: caption`) have no `|` and are excluded from table_blocks.
+        // Use a fully aligned table so that MD060 does not flag the pipe rows themselves.
+        let content = "\
+| H1 | H2 |
+| -- | -- |
+| a  | b  |
+
+: My table caption
+";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD060 should not flag the pipe-table caption line: {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD060 already-aligned table with caption should have no warnings under Standard: {result_std:?}"
+        );
+    }
 }

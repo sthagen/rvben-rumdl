@@ -655,4 +655,120 @@ Some text in between.
     fn test_roundtrip_multiple_tables() {
         assert_fix_roundtrip("| A | B |\n|---|---|\n| 1 | 2 |\n\nText\n\n| C | D | E |\n|---|---|---|\n| 3 | 4 |");
     }
+
+    // === Pandoc construct reachability tests ===
+    //
+    // These tests document that MD056 does not flag Pandoc-specific constructs
+    // because `ctx.table_blocks` excludes them at the source:
+    //
+    // - Grid table delimiters use `+---+---+` (no `|`), so `is_delimiter_row`
+    //   returns false and no `TableBlock` is created.
+    // - Multi-line table separators have no `|`, same exclusion.
+    // - Line blocks (`| First line`) end without `|`; `is_potential_table_row`
+    //   requires `valid_parts >= 2` for non-outer-piped lines (only 1 found).
+    // - Pipe-table captions (`: caption`) have no `|` — excluded.
+    //
+    // No production guard is needed. If `find_table_blocks` ever changes to
+    // include these constructs, these tests will surface that.
+
+    #[test]
+    fn md056_pandoc_grid_tables_not_flagged() {
+        let rule = MD056TableColumnCount;
+        let content = "\
++---+---+
+| a | b |
++===+===+
+| 1 | 2 |
++---+---+
+";
+        // Grid table delimiters (`+===+===+`) contain no `|`, so `is_delimiter_row`
+        // returns false and no TableBlock is created — no MD056 check runs.
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD056 should not flag Pandoc grid tables (excluded by table_blocks): {result:?}"
+        );
+
+        // Standard flavor: same content produces no warnings for the same reason.
+        let ctx_std = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD056 should not flag grid-table-like content under Standard either: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md056_pandoc_multi_line_tables_not_flagged() {
+        let rule = MD056TableColumnCount;
+        let content = "\
+--------- ----------- ------
+Header 1   Header 2   Header 3
+--------- ----------- ------
+Cell 1     Cell 2     Cell 3
+--------- ----------- ------
+";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD056 should not flag Pandoc multi-line tables: {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD056 should not flag multi-line table content under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md056_pandoc_line_blocks_not_flagged() {
+        let rule = MD056TableColumnCount;
+        // Pandoc line blocks: starts with `|` but no trailing `|`.
+        // is_potential_table_row excludes them (valid_parts < 2).
+        let content = "| First line\n| Second line\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD056 should not treat Pandoc line blocks as tables: {result:?}"
+        );
+
+        let ctx_std = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD056 should not treat line-block-like content as tables under Standard: {result_std:?}"
+        );
+    }
+
+    #[test]
+    fn md056_pandoc_pipe_table_captions_not_flagged() {
+        let rule = MD056TableColumnCount;
+        // Pipe-table captions (`: caption`) have no `|` — excluded from table_blocks.
+        let content = "\
+| H1 | H2 |
+|----|-----|
+| a  | b  |
+
+: My table caption
+";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD056 should not flag the pipe-table caption line: {result:?}"
+        );
+
+        // Under Standard: caption line is ignored; valid table has no warnings.
+        let ctx_std = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            result_std.is_empty(),
+            "MD056 already-valid table with caption should have no warnings under Standard: {result_std:?}"
+        );
+    }
 }
