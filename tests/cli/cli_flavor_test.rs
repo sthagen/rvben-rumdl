@@ -32,6 +32,19 @@ fn test_flavor_cli_option_recognized() {
 }
 
 #[test]
+fn test_flavor_pandoc_parses() {
+    let temp_dir = tempdir().unwrap();
+    let md_path = temp_dir.path().join("test.md");
+    fs::write(&md_path, "# Test\n\nSome content.\n").unwrap();
+
+    let (success, stdout, stderr) = run_rumdl(temp_dir.path(), &["check", "--flavor", "pandoc", "test.md"]);
+    assert!(
+        success,
+        "Command should succeed for flavor 'pandoc'. stderr: {stderr}, stdout: {stdout}"
+    );
+}
+
+#[test]
 fn test_flavor_cli_all_variants() {
     let temp_dir = tempdir().unwrap();
     let md_path = temp_dir.path().join("test.md");
@@ -45,6 +58,7 @@ fn test_flavor_cli_all_variants() {
         "commonmark",
         "mkdocs",
         "mdx",
+        "pandoc",
         "quarto",
         "qmd",
         "rmd",

@@ -167,7 +167,7 @@ pub struct CheckArgs {
     #[arg(
         long,
         value_enum,
-        help = "Markdown flavor to use: standard (also accepts gfm/github/commonmark), mkdocs, mdx, quarto, obsidian, or kramdown"
+        help = "Markdown flavor to use: standard (also accepts gfm/github/commonmark), mkdocs, mdx, pandoc, quarto, obsidian, or kramdown"
     )]
     pub flavor: Option<Flavor>,
 
@@ -257,7 +257,7 @@ pub struct FmtArgs {
     #[arg(
         long,
         value_enum,
-        help = "Markdown flavor to use while formatting: standard (also accepts gfm/github/commonmark), mkdocs, mdx, quarto, obsidian, or kramdown"
+        help = "Markdown flavor to use while formatting: standard (also accepts gfm/github/commonmark), mkdocs, mdx, pandoc, quarto, obsidian, or kramdown"
     )]
     pub flavor: Option<Flavor>,
 
@@ -407,6 +407,7 @@ pub enum Flavor {
     MkDocs,
     #[allow(clippy::upper_case_acronyms)]
     MDX,
+    Pandoc,
     #[value(aliases(["qmd", "rmd", "rmarkdown"]))]
     Quarto,
     Obsidian,
@@ -420,6 +421,7 @@ impl From<Flavor> for rumdl_lib::config::MarkdownFlavor {
             Flavor::Standard => Self::Standard,
             Flavor::MkDocs => Self::MkDocs,
             Flavor::MDX => Self::MDX,
+            Flavor::Pandoc => Self::Pandoc,
             Flavor::Quarto => Self::Quarto,
             Flavor::Obsidian => Self::Obsidian,
             Flavor::Kramdown => Self::Kramdown,
