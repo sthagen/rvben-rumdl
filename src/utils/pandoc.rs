@@ -61,6 +61,17 @@ pub fn has_pandoc_attributes(line: &str) -> bool {
     PANDOC_ATTR_PATTERN.is_match(line)
 }
 
+/// Return true if `lang` is a Pandoc raw-format declaration: `{=html}`,
+/// `{=latex}`, etc. The format name must be non-empty and consist only of
+/// ASCII alphanumeric characters, underscores, or hyphens.
+pub fn is_pandoc_raw_block_lang(lang: &str) -> bool {
+    let l = lang.trim();
+    l.starts_with("{=") && l.ends_with('}') && {
+        let inner = &l[2..l.len() - 1];
+        !inner.trim().is_empty() && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    }
+}
+
 /// Get the indentation level of a div marker
 pub fn get_div_indent(line: &str) -> usize {
     let mut indent = 0;
@@ -1805,5 +1816,29 @@ After.
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0].start, 0);
         assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_is_pandoc_raw_block_lang() {
+        assert!(is_pandoc_raw_block_lang("{=html}"));
+        assert!(is_pandoc_raw_block_lang("{=latex}"));
+        assert!(is_pandoc_raw_block_lang("{=docx}"));
+        assert!(is_pandoc_raw_block_lang("{=rst}"));
+        // Hyphens and underscores are part of the allowed character set.
+        assert!(is_pandoc_raw_block_lang("{=open-document}"));
+        assert!(is_pandoc_raw_block_lang("{=my_format}"));
+        // Uppercase is accepted (Pandoc itself is case-sensitive but the
+        // grammar permits any ASCII alphanumeric).
+        assert!(is_pandoc_raw_block_lang("{=HTML}"));
+        // Reject Quarto exec blocks.
+        assert!(!is_pandoc_raw_block_lang("{r}"));
+        assert!(!is_pandoc_raw_block_lang("{python}"));
+        // Reject malformed.
+        assert!(!is_pandoc_raw_block_lang("{=}"));
+        assert!(!is_pandoc_raw_block_lang("{=  }"));
+        assert!(!is_pandoc_raw_block_lang("=html"));
+        // Reject inner whitespace and special characters.
+        assert!(!is_pandoc_raw_block_lang("{=html }"));
+        assert!(!is_pandoc_raw_block_lang("{=ht ml}"));
     }
 }
