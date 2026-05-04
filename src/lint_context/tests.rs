@@ -1540,3 +1540,31 @@ fn test_standard_flavor_skips_sub_super() {
     let pos = content.find("~2~").unwrap() + 1;
     assert!(!ctx.is_in_subscript_or_superscript(pos));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_inline_code_attribute() {
+    use crate::config::MarkdownFlavor;
+    let content = "Use `print()`{.python} for output.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("{.python}").unwrap() + 1;
+    assert!(ctx.is_in_inline_code_attr(pos));
+}
+
+#[test]
+fn test_pandoc_flavor_skips_bare_brace_block() {
+    use crate::config::MarkdownFlavor;
+    // A `{...}` not preceded by `` `code` `` is not an inline-code attribute.
+    let content = "Use {.example} for the class.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("{.example}").unwrap() + 1;
+    assert!(!ctx.is_in_inline_code_attr(pos));
+}
+
+#[test]
+fn test_standard_flavor_skips_inline_code_attribute() {
+    use crate::config::MarkdownFlavor;
+    let content = "Use `print()`{.python} for output.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("{.python}").unwrap() + 1;
+    assert!(!ctx.is_in_inline_code_attr(pos));
+}

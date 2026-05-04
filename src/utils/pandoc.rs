@@ -365,6 +365,37 @@ pub fn detect_subscript_superscript_ranges(content: &str) -> Vec<ByteRange> {
 }
 
 // ============================================================================
+// Inline Code Attribute Support
+// ============================================================================
+//
+// Pandoc `inline_code_attributes` extension: `` `code`{.lang} ``
+//
+// The attribute block must immediately follow the closing backtick of the
+// inline code span. Only the `{...}` part is captured; the backtick span
+// itself is already handled by the standard code-span detector.
+
+/// Pattern for inline code attribute: a backtick-quoted span immediately
+/// followed by `{...}`. We capture only the trailing attribute block.
+static INLINE_CODE_ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`[^`]*`(\{[^}]+\})").unwrap());
+
+/// Detect Pandoc inline code attribute ranges.
+///
+/// Inline code attributes are written as `` `code`{.lang} ``. Returns the
+/// byte ranges of the trailing `{...}` attribute block only (not the
+/// backticked code itself).
+pub fn detect_inline_code_attr_ranges(content: &str) -> Vec<ByteRange> {
+    let mut ranges = Vec::new();
+    for caps in INLINE_CODE_ATTR.captures_iter(content) {
+        let m = caps.get(1).unwrap();
+        ranges.push(ByteRange {
+            start: m.start(),
+            end: m.end(),
+        });
+    }
+    ranges
+}
+
+// ============================================================================
 // Example List Support
 // ============================================================================
 //
@@ -862,6 +893,42 @@ Warning content here.
         let ranges = detect_subscript_superscript_ranges(content);
         assert_eq!(ranges.len(), 1);
         assert_eq!(&content[ranges[0].start..ranges[0].end], "^x^");
+    }
+
+    #[test]
+    fn test_detect_inline_code_attribute() {
+        // `code`{.python} — the {.python} is a Pandoc attribute on inline code.
+        let content = "Use `print()`{.python} for output.\n";
+        let ranges = detect_inline_code_attr_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let r = &ranges[0];
+        assert_eq!(&content[r.start..r.end], "{.python}");
+    }
+
+    #[test]
+    fn test_inline_code_attribute_only_after_backtick() {
+        // A bare `{...}` in prose is not an inline code attribute.
+        let content = "Use {.example} for the class.\n";
+        let ranges = detect_inline_code_attr_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_inline_code_attribute_multiple_on_one_line() {
+        let content = "Use `a`{.x} and `b`{.y} here.\n";
+        let ranges = detect_inline_code_attr_ranges(content);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&content[ranges[0].start..ranges[0].end], "{.x}");
+        assert_eq!(&content[ranges[1].start..ranges[1].end], "{.y}");
+    }
+
+    #[test]
+    fn test_inline_code_attribute_compound_attributes() {
+        // Pandoc supports compound attribute blocks: classes, IDs, and key=value pairs.
+        let content = "Use `code`{.lang #id key=value} here.\n";
+        let ranges = detect_inline_code_attr_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&content[ranges[0].start..ranges[0].end], "{.lang #id key=value}");
     }
 
     #[test]

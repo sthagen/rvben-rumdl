@@ -92,6 +92,7 @@ pub struct LintContext<'a> {
     example_list_marker_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc example-list marker ranges (@) / (@label)
     example_reference_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc example reference ranges (@label) inline
     sub_super_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc subscript (~x~) and superscript (^x^) ranges
+    inline_code_attr_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc inline code attribute ranges (`code`{.lang})
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -637,6 +638,15 @@ impl<'a> LintContext<'a> {
             }
         });
 
+        // Pre-compute Pandoc inline code attribute ranges (`code`{.lang}) for Pandoc-compatible flavors
+        let inline_code_attr_ranges = profile_section!("Inline code attribute ranges", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::detect_inline_code_attr_ranges(content)
+            } else {
+                Vec::new()
+            }
+        });
+
         // Pre-compute Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
         let shortcode_ranges = profile_section!("Shortcode ranges", profile, {
             use crate::utils::regex_cache::HUGO_SHORTCODE_REGEX;
@@ -689,6 +699,7 @@ impl<'a> LintContext<'a> {
             example_list_marker_ranges,
             example_reference_ranges,
             sub_super_ranges,
+            inline_code_attr_ranges,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1131,6 +1142,15 @@ impl<'a> LintContext<'a> {
     pub fn is_in_subscript_or_superscript(&self, byte_pos: usize) -> bool {
         let idx = self.sub_super_ranges.partition_point(|r| r.start <= byte_pos);
         idx > 0 && byte_pos < self.sub_super_ranges[idx - 1].end
+    }
+
+    /// Check if a byte position is within a Pandoc inline-code attribute block
+    /// (`{.lang}` immediately following `` `code` ``). Active for Pandoc-compatible
+    /// flavors. O(log n).
+    #[inline]
+    pub fn is_in_inline_code_attr(&self, byte_pos: usize) -> bool {
+        let idx = self.inline_code_attr_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.inline_code_attr_ranges[idx - 1].end
     }
 
     /// Returns true if `link_text` slugifies to a heading present in the document.
