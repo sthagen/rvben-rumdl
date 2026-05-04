@@ -88,6 +88,31 @@ impl LineInfo {
     pub fn in_mkdocs_container(&self) -> bool {
         self.in_admonition || self.in_content_tab || self.in_mkdocs_html_markdown
     }
+
+    /// Whether this line could be part of a paragraph block (CommonMark `paragraph` token).
+    ///
+    /// Returns true for ordinary prose lines, including those inside blockquotes and list items.
+    /// Returns false for lines that belong to non-paragraph blocks: headings, code blocks,
+    /// HTML blocks, math blocks, horizontal rules, front matter, structural div markers, and
+    /// flavor-specific extension blocks. This is the per-line view; cross-line constructs like
+    /// setext underlines aren't visible here and need additional context to detect.
+    ///
+    /// Used by rules (e.g. MD009 strict mode) that need to distinguish "trailing whitespace
+    /// could produce a meaningful `<br>`" from "trailing whitespace is on a structural boundary."
+    #[inline]
+    pub fn is_paragraph_context(&self) -> bool {
+        !self.in_code_block
+            && !self.in_front_matter
+            && !self.in_html_block
+            && !self.in_html_comment
+            && !self.in_math_block
+            && !self.is_horizontal_rule
+            && !self.is_div_marker
+            && !self.in_pymdown_block
+            && !self.in_kramdown_extension_block
+            && !self.is_kramdown_block_ial
+            && self.heading.is_none()
+    }
 }
 
 /// Information about a list item

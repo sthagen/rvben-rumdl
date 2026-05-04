@@ -1,4 +1,5 @@
-use crate::lint_context::LineInfo;
+use crate::lint_context::LintContext;
+use crate::lint_context::types::HeadingStyle;
 use crate::rule::{Fix, LintError, LintResult, LintWarning, Rule, RuleCategory, Severity};
 use crate::rule_config_serde::RuleConfig;
 use crate::utils::range_utils::calculate_trailing_range;
@@ -7,25 +8,49 @@ use crate::utils::regex_cache::{ORDERED_LIST_MARKER_REGEX, UNORDERED_LIST_MARKER
 mod md009_config;
 use md009_config::MD009Config;
 
-/// Whether a line can produce a meaningful `<br>` from trailing spaces.
+/// Whether the line at `line_num` (0-indexed) is a setext heading underline (`===` or `---`).
 ///
-/// Mirrors markdownlint's MD009 strict semantics: trailing spaces only generate
-/// a hard line break inside a paragraph (including paragraph content nested in
-/// blockquotes, list items, etc.). On heading lines, code blocks, HTML blocks,
-/// horizontal rules, math blocks, and other non-paragraph contexts, trailing
-/// spaces are inert — strict mode flags them.
-fn is_paragraph_context_line(info: &LineInfo) -> bool {
-    !info.in_code_block
-        && !info.in_front_matter
-        && !info.in_html_block
-        && !info.in_html_comment
-        && !info.in_math_block
-        && !info.is_horizontal_rule
-        && !info.is_div_marker
-        && !info.in_pymdown_block
-        && !info.in_kramdown_extension_block
-        && !info.is_kramdown_block_ial
-        && info.heading.is_none()
+/// rumdl marks `LineInfo::heading` only on the setext text line, not the underline; the
+/// underline still parses as `is_paragraph_context` per its own flags. Detect it by looking
+/// back to the previous line's heading style.
+fn is_setext_underline(ctx: &LintContext, line_num: usize) -> bool {
+    if line_num == 0 {
+        return false;
+    }
+    ctx.line_info(line_num).is_some_and(|prev| {
+        prev.heading
+            .as_ref()
+            .is_some_and(|h| matches!(h.style, HeadingStyle::Setext1 | HeadingStyle::Setext2))
+    })
+}
+
+/// Whether a `<br>` produced by trailing spaces on the line at `line_num` (0-indexed)
+/// would be meaningful — i.e. the line is paragraph-context AND the next line continues
+/// the same paragraph.
+///
+/// Mirrors markdownlint's MD009 strict logic, which only allows the `br_spaces` exception
+/// on lines covered by `[paragraph.startLine, paragraph.endLine - 1]`. The last line of a
+/// paragraph (single-line paragraph, line before a blank, line before a heading, separated
+/// list items, etc.) gets no useful break and is flagged.
+fn br_produces_useful_break(ctx: &LintContext, line_num: usize) -> bool {
+    let lines = ctx.raw_lines();
+    let Some(current) = ctx.line_info(line_num + 1) else {
+        return false;
+    };
+    if !current.is_paragraph_context() || is_setext_underline(ctx, line_num) {
+        return false;
+    }
+    let next_idx = line_num + 1;
+    if next_idx >= lines.len() {
+        return false;
+    }
+    let Some(next) = ctx.line_info(next_idx + 1) else {
+        return false;
+    };
+    if next.is_blank || !next.is_paragraph_context() || next.list_item.is_some() || is_setext_underline(ctx, next_idx) {
+        return false;
+    }
+    true
 }
 
 #[derive(Debug, Clone, Default)]
@@ -191,18 +216,23 @@ impl Rule for MD009TrailingSpaces {
             }
 
             // Check if it's a valid line break (only ASCII spaces count for br_spaces).
-            // The br_spaces exception applies whenever the trailing whitespace can produce
-            // a meaningful `<br>`. In `strict` mode we additionally require the line to be
-            // in a paragraph context — headings, code blocks, HTML blocks, horizontal rules,
-            // etc. cannot produce a useful line break from trailing spaces, so strict still
-            // flags those. This matches markdownlint's MD009 strict semantics.
+            // The br_spaces exception applies when the trailing whitespace produces a `<br>`.
+            // In non-strict mode we accept br_spaces anywhere that isn't the literal final
+            // line of the document. In strict mode (markdownlint parity) we additionally
+            // require the line to be a non-last line of a paragraph: structural lines
+            // (headings, fences, setext underlines, horizontal rules, ...) and last lines
+            // of paragraphs (single-line paragraphs, lines before blanks, list-item ends,
+            // ...) all get flagged because the `<br>` they would emit is unobservable.
             let is_truly_last_line = line_num == lines.len() - 1 && !content.ends_with('\n');
             let has_only_ascii_trailing = trailing_ascii_spaces == trailing_all_whitespace;
             let matches_br_spaces = trailing_ascii_spaces == self.config.br_spaces.get();
             if !is_truly_last_line && has_only_ascii_trailing && matches_br_spaces {
-                let line_info = ctx.line_info(line_num + 1);
-                let is_paragraph_line = line_info.is_some_and(is_paragraph_context_line);
-                if !self.config.strict || is_paragraph_line {
+                let allow = if self.config.strict {
+                    br_produces_useful_break(ctx, line_num)
+                } else {
+                    true
+                };
+                if allow {
                     continue;
                 }
             }
@@ -356,18 +386,21 @@ mod tests {
     #[test]
     fn test_strict_mode() {
         let rule = MD009TrailingSpaces::new(2, true);
-        // markdownlint parity: strict mode keeps the br_spaces exception for paragraph
-        // lines (lines 1 and 2) but still flags trailing spaces inside code fences and
-        // fence boundaries (lines 3, 4, 5) where the spaces can't produce a `<br>`.
+        // Strict mode keeps the br_spaces exception only on non-last paragraph lines:
+        //   - line 1 ("Line with spaces  ") has paragraph continuation on line 2 -> allowed
+        //   - line 2 ("Code block:  ") is followed by a code fence (non-paragraph next)
+        //     so its `<br>` is wasted -> flagged
+        //   - lines 3 and 5 are fence boundaries (non-paragraph) -> flagged
+        //   - line 4 is inside the code block; rumdl's strict mode is intentionally
+        //     more thorough than markdownlint and flags trailing whitespace there too
         let content = "Line with spaces  \nCode block:  \n```  \nCode with spaces  \n```  ";
         let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
         let result = rule.check(&ctx).unwrap();
         let lines_flagged: Vec<usize> = result.iter().map(|w| w.line).collect();
-        assert_eq!(lines_flagged, vec![3, 4, 5], "got: {result:?}");
+        assert_eq!(lines_flagged, vec![2, 3, 4, 5], "got: {result:?}");
 
-        // Fix preserves the br_spaces on paragraph lines but strips them inside code blocks.
         let fixed = rule.fix(&ctx).unwrap();
-        assert_eq!(fixed, "Line with spaces  \nCode block:  \n```\nCode with spaces\n```");
+        assert_eq!(fixed, "Line with spaces  \nCode block:\n```\nCode with spaces\n```");
     }
 
     #[test]
@@ -404,16 +437,125 @@ mod tests {
     }
 
     #[test]
-    fn test_strict_mode_allows_br_spaces_before_blank_line() {
-        // 2 trailing spaces before a blank line are still on a paragraph-context line
-        // by markdownlint's AST classification, so strict does not flag them.
+    fn test_strict_mode_flags_br_spaces_on_last_paragraph_line() {
+        // markdownlint parity: a `<br>` from trailing spaces on the last line of a
+        // paragraph is unobservable (the paragraph already ends at the next blank
+        // line), so strict mode flags it.
         let rule = MD009TrailingSpaces::new(2, true);
         let content = "Paragraph  \n\nNext paragraph.\n";
         let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
         let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.iter().map(|w| w.line).collect::<Vec<_>>(),
+            vec![1],
+            "strict should flag br_spaces on a single-line paragraph, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_flags_br_spaces_between_list_items() {
+        // markdownlint parity: each top-level list item is its own paragraph block.
+        // Trailing br_spaces on item 1 don't bridge into item 2; strict flags them.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "- item 1  \n- item 2\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.iter().map(|w| w.line).collect::<Vec<_>>(),
+            vec![1],
+            "strict should flag br_spaces at the end of a list item, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_allows_br_spaces_in_list_item_continuation() {
+        // markdownlint parity: a list item with a continuation line is a single
+        // paragraph; a trailing 2-space line break inside it is meaningful.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "- first line  \n  second line of same item\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
         assert!(
             result.is_empty(),
-            "strict mode should not flag br_spaces on paragraph lines (matches markdownlint), got: {result:?}"
+            "strict should allow br_spaces between a list item and its continuation, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_flags_br_spaces_before_heading() {
+        // markdownlint parity: an ATX heading interrupts the paragraph above it,
+        // so the line before it is a paragraph end — strict flags trailing br_spaces.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "Paragraph  \n# Heading\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.iter().map(|w| w.line).collect::<Vec<_>>(),
+            vec![1],
+            "strict should flag br_spaces on the line before a heading, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_flags_br_spaces_on_setext_heading_text() {
+        // Setext heading text line is a heading, not a paragraph, so trailing spaces
+        // on it can't produce a <br>. Strict mode flags it.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "Setext heading  \n===\n\nFollow-up paragraph.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.iter().map(|w| w.line).collect::<Vec<_>>(),
+            vec![1],
+            "strict should flag setext heading text trailing spaces, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_flags_br_spaces_on_setext_underline() {
+        // The setext underline is part of the heading block, not a paragraph.
+        // rumdl marks `heading` only on the text line; the underline is detected by
+        // looking back. Strict mode flags trailing spaces on it.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "Setext heading\n===  \n\nFollow-up paragraph.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.iter().map(|w| w.line).collect::<Vec<_>>(),
+            vec![2],
+            "strict should flag setext underline trailing spaces, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_flags_br_spaces_in_indented_code_block() {
+        // Indented code blocks aren't paragraphs. rumdl's strict mode is intentionally
+        // stricter than markdownlint here (markdownlint excludes code blocks entirely
+        // unless `code_blocks: true`); we surface the trailing whitespace as a warning.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "Paragraph above.\n\n    code line  \n    another code  \n\nParagraph below.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(
+            result.iter().map(|w| w.line).collect::<Vec<_>>(),
+            vec![3, 4],
+            "strict should flag indented code block trailing spaces, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_strict_mode_allows_br_spaces_in_table_row() {
+        // GFM table rows close with `|`; the trailing whitespace before that pipe is
+        // inside the cell, not at the line end. This test guards against future
+        // refactors mistakenly treating table rows as a special non-paragraph context
+        // when there is in fact no end-of-line whitespace on the row.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "| col |\n| --- |\n| cell  |\n\nParagraph.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "rows that don't actually have trailing whitespace shouldn't trigger MD009, got: {result:?}"
         );
     }
 
