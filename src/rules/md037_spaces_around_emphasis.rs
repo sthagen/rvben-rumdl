@@ -134,7 +134,14 @@ impl Rule for MD037NoSpaceInEmphasis {
 
                     // Skip if inside links, HTML comments, math contexts, tables, code spans, MDX constructs, or MkDocs markup
                     // Note: is_in_code_span uses pulldown-cmark and correctly handles multi-line spans
-                    if !self.is_in_link(ctx, byte_pos)
+                    // Pandoc bracketed spans `[text]{.class}` may contain spaced
+                    // emphasis markers as literal content; suppress MD037 there.
+                    // Subscripts/superscripts cannot contain whitespace per the
+                    // detector grammar, so MD037's spaced-emphasis warnings can
+                    // never land inside one.
+                    let in_pandoc_construct = ctx.flavor.is_pandoc_compatible() && ctx.is_in_bracketed_span(byte_pos);
+                    if !in_pandoc_construct
+                        && !self.is_in_link(ctx, byte_pos)
                         && !is_in_html_comment(content, byte_pos)
                         && !is_in_math_context(ctx, byte_pos)
                         && !is_in_table_cell(ctx, line_num, warning.column)
@@ -1028,6 +1035,30 @@ This has * real spaced emphasis * that should be flagged."#;
             "Should flag real spaced emphasis but not code content. Got: {result4:?}"
         );
         assert_eq!(result4[0].column, 6);
+    }
+
+    /// Emphasis with spaces inside Pandoc bracketed spans should be suppressed under Pandoc,
+    /// but regular emphasis-with-spaces outside bracketed spans must still be flagged.
+    #[test]
+    fn test_pandoc_bracketed_span_guard() {
+        use crate::config::MarkdownFlavor;
+        let rule = MD037NoSpaceInEmphasis::default();
+        // Emphasis-like pattern inside a bracketed span (Pandoc construct)
+        let content = "See [* important *]{.highlight} for details.\n";
+        let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "MD037 should not flag emphasis-like patterns inside Pandoc bracketed spans: {result:?}"
+        );
+
+        // Outside Pandoc flavor, the same text should still be flagged
+        let ctx_std = LintContext::new(content, MarkdownFlavor::Standard, None);
+        let result_std = rule.check(&ctx_std).unwrap();
+        assert!(
+            !result_std.is_empty(),
+            "MD037 should still flag spaces in emphasis under Standard flavor: {result_std:?}"
+        );
     }
 
     #[test]
