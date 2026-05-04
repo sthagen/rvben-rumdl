@@ -45,10 +45,13 @@ fn test_md009_code_blocks() {
 #[test]
 fn test_md009_strict_mode() {
     let rule = MD009TrailingSpaces::new(2, true);
-    let content = "Line with two spaces  \nCode block```\nWith spaces  \n```\n";
+    // markdownlint parity: strict preserves the br_spaces exception on paragraph
+    // lines (line 1) but still flags trailing spaces inside fenced code blocks.
+    let content = "Line with two spaces  \nText before fence:\n```\nCode with spaces  \n```\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.check(&ctx).unwrap();
-    assert_eq!(result.len(), 2); // Both lines should be flagged in strict mode
+    let lines_flagged: Vec<usize> = result.iter().map(|w| w.line).collect();
+    assert_eq!(lines_flagged, vec![4], "got: {result:?}");
 }
 
 #[test]
@@ -93,7 +96,14 @@ fn test_md009_fix_strict() {
     let content = "Line with spaces   \nAnother line  \nNo spaces\n  \n```\nCode   \n```\n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
     let result = rule.fix(&ctx).unwrap();
-    assert_eq!(result, "Line with spaces\nAnother line\nNo spaces\n\n```\nCode\n```\n");
+    // Line 1: 3 trailing spaces -> stripped (not br_spaces match).
+    // Line 2: 2 trailing spaces on a paragraph line -> preserved (markdownlint parity).
+    // Line 4: blank-line whitespace -> stripped.
+    // Line 6: trailing spaces inside code block -> stripped.
+    assert_eq!(
+        result,
+        "Line with spaces\nAnother line  \nNo spaces\n\n```\nCode\n```\n"
+    );
 }
 
 #[test]
@@ -454,13 +464,14 @@ fn test_md009_emoji_fix_range() {
 #[test]
 fn test_md009_mixed_multibyte_fix_range() {
     let rule = MD009TrailingSpaces::new(2, true);
-    // Mix of ASCII, Euro, CJK, and emoji
-    let content = "Price: €100 你好 🎉  \n";
+    // Mix of ASCII, Euro, CJK, and emoji. Use 3 trailing spaces (not br_spaces)
+    // so the paragraph line is still flagged regardless of strict semantics.
+    let content = "Price: €100 你好 🎉   \n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
 
     let warnings = rule.check(&ctx).unwrap();
     assert_eq!(warnings.len(), 1);
-    assert_eq!(warnings[0].message, "2 trailing spaces found");
+    assert_eq!(warnings[0].message, "3 trailing spaces found");
 
     // Verify the fix works correctly
     let fixed = rule.fix(&ctx).unwrap();
@@ -509,11 +520,13 @@ fn test_md009_warning_based_fix_multibyte() {
 
 #[test]
 fn test_md009_multiple_lines_multibyte_fix() {
-    // Test multiple lines with multi-byte characters
+    // Test multiple lines with multi-byte characters. All lines use trailing-space
+    // counts that don't match br_spaces=2, so they're flagged in strict mode
+    // regardless of paragraph context.
     use rumdl_lib::utils::fix_utils::apply_warning_fixes;
 
     let rule = MD009TrailingSpaces::new(2, true);
-    let content = "€ price  \n¥ yen   \n£ pound \n";
+    let content = "€ price   \n¥ yen   \n£ pound \n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
 
     let warnings = rule.check(&ctx).unwrap();
@@ -577,9 +590,11 @@ fn test_md009_combining_characters_fix() {
 
 #[test]
 fn test_md009_list_with_multibyte_marker_content() {
-    // Test list items where the content after marker contains multi-byte chars
+    // Test list items where the content after marker contains multi-byte chars.
+    // Both lines use 3 trailing spaces (not br_spaces) so they're flagged in
+    // strict mode regardless of paragraph context.
     let rule = MD009TrailingSpaces::new(2, true);
-    let content = "- 价格: €50   \n- 價格: ¥100  \n";
+    let content = "- 价格: €50   \n- 價格: ¥100   \n";
     let ctx = LintContext::new(content, rumdl_lib::config::MarkdownFlavor::Standard, None);
 
     let warnings = rule.check(&ctx).unwrap();

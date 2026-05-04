@@ -1,3 +1,4 @@
+use crate::lint_context::LineInfo;
 use crate::rule::{Fix, LintError, LintResult, LintWarning, Rule, RuleCategory, Severity};
 use crate::rule_config_serde::RuleConfig;
 use crate::utils::range_utils::calculate_trailing_range;
@@ -5,6 +6,27 @@ use crate::utils::regex_cache::{ORDERED_LIST_MARKER_REGEX, UNORDERED_LIST_MARKER
 
 mod md009_config;
 use md009_config::MD009Config;
+
+/// Whether a line can produce a meaningful `<br>` from trailing spaces.
+///
+/// Mirrors markdownlint's MD009 strict semantics: trailing spaces only generate
+/// a hard line break inside a paragraph (including paragraph content nested in
+/// blockquotes, list items, etc.). On heading lines, code blocks, HTML blocks,
+/// horizontal rules, math blocks, and other non-paragraph contexts, trailing
+/// spaces are inert — strict mode flags them.
+fn is_paragraph_context_line(info: &LineInfo) -> bool {
+    !info.in_code_block
+        && !info.in_front_matter
+        && !info.in_html_block
+        && !info.in_html_comment
+        && !info.in_math_block
+        && !info.is_horizontal_rule
+        && !info.is_div_marker
+        && !info.in_pymdown_block
+        && !info.in_kramdown_extension_block
+        && !info.is_kramdown_block_ial
+        && info.heading.is_none()
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct MD009TrailingSpaces {
@@ -168,15 +190,21 @@ impl Rule for MD009TrailingSpaces {
                 }
             }
 
-            // Check if it's a valid line break (only ASCII spaces count for br_spaces)
+            // Check if it's a valid line break (only ASCII spaces count for br_spaces).
+            // The br_spaces exception applies whenever the trailing whitespace can produce
+            // a meaningful `<br>`. In `strict` mode we additionally require the line to be
+            // in a paragraph context — headings, code blocks, HTML blocks, horizontal rules,
+            // etc. cannot produce a useful line break from trailing spaces, so strict still
+            // flags those. This matches markdownlint's MD009 strict semantics.
             let is_truly_last_line = line_num == lines.len() - 1 && !content.ends_with('\n');
             let has_only_ascii_trailing = trailing_ascii_spaces == trailing_all_whitespace;
-            if !self.config.strict
-                && !is_truly_last_line
-                && has_only_ascii_trailing
-                && trailing_ascii_spaces == self.config.br_spaces.get()
-            {
-                continue;
+            let matches_br_spaces = trailing_ascii_spaces == self.config.br_spaces.get();
+            if !is_truly_last_line && has_only_ascii_trailing && matches_br_spaces {
+                let line_info = ctx.line_info(line_num + 1);
+                let is_paragraph_line = line_info.is_some_and(is_paragraph_context_line);
+                if !self.config.strict || is_paragraph_line {
+                    continue;
+                }
             }
 
             // Check if this is an empty blockquote line ("> " or ">> " etc)
@@ -328,14 +356,65 @@ mod tests {
     #[test]
     fn test_strict_mode() {
         let rule = MD009TrailingSpaces::new(2, true);
+        // markdownlint parity: strict mode keeps the br_spaces exception for paragraph
+        // lines (lines 1 and 2) but still flags trailing spaces inside code fences and
+        // fence boundaries (lines 3, 4, 5) where the spaces can't produce a `<br>`.
         let content = "Line with spaces  \nCode block:  \n```  \nCode with spaces  \n```  ";
         let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
         let result = rule.check(&ctx).unwrap();
-        // In strict mode, all trailing spaces are flagged
-        assert_eq!(result.len(), 5);
+        let lines_flagged: Vec<usize> = result.iter().map(|w| w.line).collect();
+        assert_eq!(lines_flagged, vec![3, 4, 5], "got: {result:?}");
 
+        // Fix preserves the br_spaces on paragraph lines but strips them inside code blocks.
         let fixed = rule.fix(&ctx).unwrap();
-        assert_eq!(fixed, "Line with spaces\nCode block:\n```\nCode with spaces\n```");
+        assert_eq!(fixed, "Line with spaces  \nCode block:  \n```\nCode with spaces\n```");
+    }
+
+    #[test]
+    fn test_strict_mode_allows_br_spaces_on_paragraph_lines() {
+        // markdownlint parity: when `strict = true`, the br_spaces (2-space) line break
+        // is still allowed on paragraph-context lines because the trailing spaces
+        // produce a real <br>. Strict only flags trailing spaces on lines that can't
+        // produce a useful line break (headings, code blocks, last line, etc.).
+        //
+        // Reproduction from issue #593: blockquote prose with a 2-space line break.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "> Note:  \n> This is in a new line due to 2 spaces behind \"Note:\".\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "strict mode should allow br_spaces on paragraph-context lines, got: {result:?}"
+        );
+
+        // The fix() must not strip those spaces either, since the rule didn't flag them.
+        let fixed = rule.fix(&ctx).unwrap();
+        assert_eq!(fixed, content);
+    }
+
+    #[test]
+    fn test_strict_mode_flags_br_spaces_on_heading() {
+        // Headings don't produce a <br> from trailing spaces, so strict mode flags them.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "# Heading  \nFollow-up paragraph.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1, "strict should flag heading br_spaces, got: {result:?}");
+        assert_eq!(result[0].line, 1);
+    }
+
+    #[test]
+    fn test_strict_mode_allows_br_spaces_before_blank_line() {
+        // 2 trailing spaces before a blank line are still on a paragraph-context line
+        // by markdownlint's AST classification, so strict does not flag them.
+        let rule = MD009TrailingSpaces::new(2, true);
+        let content = "Paragraph  \n\nNext paragraph.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(
+            result.is_empty(),
+            "strict mode should not flag br_spaces on paragraph lines (matches markdownlint), got: {result:?}"
+        );
     }
 
     #[test]
