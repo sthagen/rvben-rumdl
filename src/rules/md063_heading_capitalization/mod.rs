@@ -265,14 +265,23 @@ impl MD063HeadingCapitalization {
             return true;
         }
 
-        // Check if word has internal capitals and preserve_cased_words is enabled
-        if self.config.preserve_cased_words && self.has_internal_capitals(word) {
-            return true;
-        }
+        // Numeric ordinals ("1st", "5th", "21st", ...) must always flow
+        // through the normal title-case path so mis-cased forms like
+        // "5Th" get normalised back to "5th". Skip the preserve_cased_words
+        // heuristics, which would otherwise treat "5Th" as intentionally
+        // mixed-case and leave it untouched.
+        let is_ordinal = Self::is_numeric_ordinal(word);
 
-        // Check if word is an all-caps acronym (2+ consecutive uppercase)
-        if self.config.preserve_cased_words && self.is_all_caps_acronym(word) {
-            return true;
+        if !is_ordinal {
+            // Check if word has internal capitals and preserve_cased_words is enabled
+            if self.config.preserve_cased_words && self.has_internal_capitals(word) {
+                return true;
+            }
+
+            // Check if word is an all-caps acronym (2+ consecutive uppercase)
+            if self.config.preserve_cased_words && self.is_all_caps_acronym(word) {
+                return true;
+            }
         }
 
         // Preserve caret notation for control characters (^A, ^Z, ^@, etc.)
@@ -281,6 +290,32 @@ impl MD063HeadingCapitalization {
         }
 
         false
+    }
+
+    /// Detect numeric ordinals like `1st`, `2nd`, `3rd`, `4th`, `21st`,
+    /// `100th`, ignoring the case of the suffix and any trailing
+    /// punctuation (e.g. `5th.`, `1st,`, `3rd!`).
+    ///
+    /// Such tokens have a fixed lower-case alphabetic suffix in title case
+    /// — `21st Century`, never `21St Century` — and must be detected
+    /// before applying the generic "capitalise first letter" rule.
+    fn is_numeric_ordinal(word: &str) -> bool {
+        let bytes = word.as_bytes();
+
+        // Require at least one leading ASCII digit followed by a letter.
+        let alpha_start = match bytes.iter().position(|&b| !b.is_ascii_digit()) {
+            Some(pos) if pos > 0 => pos,
+            _ => return false,
+        };
+
+        // Find where the alphabetic suffix ends (trailing punctuation, etc.).
+        let alpha_end = bytes[alpha_start..]
+            .iter()
+            .position(|b| !b.is_ascii_alphabetic())
+            .map_or(bytes.len(), |p| alpha_start + p);
+
+        let suffix = &word[alpha_start..alpha_end];
+        matches!(suffix.to_ascii_lowercase().as_str(), "st" | "nd" | "rd" | "th")
     }
 
     /// Check if a word is caret notation for control characters (e.g., ^A, ^C, ^Z)
@@ -358,7 +393,16 @@ impl MD063HeadingCapitalization {
         };
 
         let prefix = &word[..pos];
-        let mut chars = word[pos..].chars();
+        let suffix = &word[pos..];
+
+        // Numeric ordinals ("1st", "21st", "5th", ...) keep their
+        // alphabetic suffix lower-cased even at title-case positions.
+        if Self::is_numeric_ordinal(word) {
+            let suffix_lower = Self::lowercase_preserving_composition(suffix);
+            return format!("{prefix}{suffix_lower}");
+        }
+
+        let mut chars = suffix.chars();
         let first = chars.next().unwrap();
         // Use composition-preserving uppercase to avoid decomposing
         // precomposed characters (e.g., ῷ → Ω + combining marks + Ι)
@@ -2841,5 +2885,164 @@ mod tests {
             "Fix should capitalize 'To' in link text, got: {:?}",
             fix.replacement
         );
+    }
+
+    // Numeric-ordinal tests (issue #608): "1st", "2nd", "3rd", "4th", "21st"
+    // and so on must keep their alphabetic suffix lower-cased in title case
+    // and must be normalised back from mis-cased forms like "5Th".
+
+    #[test]
+    fn test_is_numeric_ordinal_recognises_canonical_forms() {
+        for word in &[
+            "1st", "2nd", "3rd", "4th", "5th", "11th", "21st", "22nd", "23rd", "100th", "1ST", "5Th", "21St", "21sT",
+        ] {
+            assert!(
+                MD063HeadingCapitalization::is_numeric_ordinal(word),
+                "expected `{word}` to be detected as a numeric ordinal"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_numeric_ordinal_rejects_non_ordinals() {
+        // Words without a digit prefix, an unrecognised alphabetic suffix,
+        // or a non-ordinal alpha tail are all rejected. Compound forms with
+        // hyphens are handled by `handle_hyphenated_word` so the helper's
+        // behaviour on them is intentionally unconstrained.
+        for word in &[
+            "first", "1stop", "ist", "5", "th", "abc", "4G", "4K", "30s", "100k", "5x", "1.5", "iPhone6S",
+        ] {
+            assert!(
+                !MD063HeadingCapitalization::is_numeric_ordinal(word),
+                "expected `{word}` NOT to be detected as a numeric ordinal"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_numeric_ordinal_strips_trailing_punctuation() {
+        for word in &["5th.", "1st,", "21st!", "3rd:", "4th)", "5th's"] {
+            assert!(
+                MD063HeadingCapitalization::is_numeric_ordinal(word),
+                "expected `{word}` to be detected as a numeric ordinal (with punctuation)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_title_case_ordinal_first_word_not_flagged() {
+        let rule = create_rule();
+        for content in &[
+            "# 1st Place\n",
+            "# 2nd Edition\n",
+            "# 3rd Time\n",
+            "# 5th Avenue\n",
+            "# 21st Century Skills\n",
+            "# 100th Customer\n",
+        ] {
+            let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+            let result = rule.check(&ctx).unwrap();
+            assert!(result.is_empty(), "Should not flag {content:?}, got: {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_title_case_ordinal_mid_heading_not_flagged() {
+        let rule = create_rule();
+        for content in &[
+            "# May 3rd Notes\n",
+            "# Top 100th Customer\n",
+            "# Notes for the 5th of May\n",
+        ] {
+            let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+            let result = rule.check(&ctx).unwrap();
+            assert!(result.is_empty(), "Should not flag {content:?}, got: {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_title_case_ordinal_corrupted_form_is_fixed() {
+        // The "sticky" case: a heading already mangled by the buggy
+        // capitaliser must be flagged and corrected back, not left alone.
+        let rule = create_rule();
+        for (input, expected) in &[
+            ("# 1St Place\n", "1st Place"),
+            ("# 5Th Avenue\n", "5th Avenue"),
+            ("# 21St Century Skills\n", "21st Century Skills"),
+            ("# May 3Rd Notes\n", "May 3rd Notes"),
+            ("# 22Nd Edition\n", "22nd Edition"),
+        ] {
+            let ctx = LintContext::new(input, crate::config::MarkdownFlavor::Standard, None);
+            let result = rule.check(&ctx).unwrap();
+            assert!(!result.is_empty(), "Should flag {input:?}");
+            let fix = result[0].fix.as_ref().expect("should have a fix");
+            assert!(
+                fix.replacement.contains(expected),
+                "Fix for {input:?} should contain {expected:?}, got: {:?}",
+                fix.replacement
+            );
+        }
+    }
+
+    #[test]
+    fn test_title_case_ordinal_lowercase_other_words_capitalised() {
+        // Non-ordinal words around an ordinal still need title-casing.
+        let rule = create_rule();
+        let content = "# 5th avenue\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1);
+        let fix = result[0].fix.as_ref().expect("should have a fix");
+        assert!(
+            fix.replacement.contains("5th Avenue"),
+            "Fix should produce '5th Avenue', got: {:?}",
+            fix.replacement
+        );
+    }
+
+    #[test]
+    fn test_title_case_ordinal_with_trailing_punctuation() {
+        let rule = create_rule();
+        let content = "# Released on the 5th.\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert!(result.is_empty(), "Should not flag {content:?}, got: {result:?}");
+    }
+
+    #[test]
+    fn test_title_case_ordinal_hyphenated() {
+        let rule = create_rule();
+        for content in &["# 21st-Century Skills\n", "# A 19th-Century Novel\n"] {
+            let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+            let result = rule.check(&ctx).unwrap();
+            assert!(result.is_empty(), "Should not flag {content:?}, got: {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_sentence_case_ordinal_corrupted_form_is_fixed() {
+        let rule = create_rule_with_style(HeadingCapStyle::SentenceCase);
+        let content = "# 5Th avenue\n";
+        let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let result = rule.check(&ctx).unwrap();
+        assert_eq!(result.len(), 1);
+        let fix = result[0].fix.as_ref().expect("should have a fix");
+        assert!(
+            fix.replacement.contains("5th avenue"),
+            "Fix should produce '5th avenue', got: {:?}",
+            fix.replacement
+        );
+    }
+
+    #[test]
+    fn test_title_case_digit_acronym_unchanged() {
+        // Non-ordinal digit-prefixed tokens (4G, 4K) must still be preserved
+        // as all-caps acronyms — the ordinal carve-out must not catch them.
+        let rule = create_rule();
+        for content in &["# 4G Networks\n", "# 4K Streaming\n"] {
+            let ctx = LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+            let result = rule.check(&ctx).unwrap();
+            assert!(result.is_empty(), "Should not flag {content:?}, got: {result:?}");
+        }
     }
 }
