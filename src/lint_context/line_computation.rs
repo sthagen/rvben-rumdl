@@ -118,8 +118,8 @@ pub(super) fn compute_basic_line_info(
         let in_front_matter = front_matter_end > 0 && i < front_matter_end;
         let is_hr = !in_code_block && !in_front_matter && is_horizontal_rule_line(line);
 
-        let in_quarto_div = flavor == MarkdownFlavor::Quarto
-            && crate::utils::pandoc::is_within_div_block_ranges(skip_ranges.quarto_div_ranges, byte_offset);
+        let in_pandoc_div = flavor.is_pandoc_compatible()
+            && crate::utils::pandoc::is_within_div_block_ranges(skip_ranges.pandoc_div_ranges, byte_offset);
 
         // Detect div marker lines (::: opening/closing) outside code blocks and front matter
         let is_div_marker = !in_code_block && !in_front_matter && line.trim_start().starts_with(":::");
@@ -145,7 +145,7 @@ pub(super) fn compute_basic_line_info(
             in_code_span_continuation: false,
             is_horizontal_rule: is_hr,
             in_math_block,
-            in_quarto_div,
+            in_pandoc_div,
             is_div_marker,
             in_jsx_expression: false,
             in_mdx_comment: false,

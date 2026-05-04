@@ -1415,3 +1415,21 @@ fn test_reference_link_empty_title_in_definition() {
     assert_eq!(ctx.reference_defs.len(), 1);
     assert_eq!(ctx.reference_defs[0].title.as_deref(), Some(""));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_div_blocks() {
+    let content = "::: {.callout-note}\nA note.\n:::\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    assert!(
+        ctx.is_in_div_block(content.find(":::").unwrap()),
+        "Pandoc flavor should detect div block ranges"
+    );
+}
+
+#[test]
+fn test_pandoc_flavor_detects_citations() {
+    let content = "See [@smith2020] for details.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("[@smith2020]").unwrap() + 1;
+    assert!(ctx.is_in_citation(pos), "Pandoc flavor should detect citation ranges");
+}

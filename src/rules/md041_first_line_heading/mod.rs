@@ -431,7 +431,7 @@ impl MD041FirstLineHeading {
             // are structural containers, not narrative content.
             let is_directive_block = line_info.in_admonition
                 || line_info.in_content_tab
-                || line_info.in_quarto_div
+                || line_info.in_pandoc_div
                 || line_info.is_div_marker
                 || line_info.in_pymdown_block;
 

@@ -327,7 +327,7 @@ impl LineFilterConfig {
             || (self.skip_mkdocstrings && line_info.in_mkdocstrings)
             || (self.skip_esm_blocks && line_info.in_esm_block)
             || (self.skip_math_blocks && line_info.in_math_block)
-            || (self.skip_quarto_divs && line_info.in_quarto_div)
+            || (self.skip_quarto_divs && line_info.in_pandoc_div)
             || (self.skip_jsx_expressions && line_info.in_jsx_expression)
             || (self.skip_mdx_comments && line_info.in_mdx_comment)
             || (self.skip_admonitions && line_info.in_admonition)

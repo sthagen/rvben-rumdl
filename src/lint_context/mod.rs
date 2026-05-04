@@ -40,7 +40,7 @@ macro_rules! profile_section {
 pub(super) struct SkipByteRanges<'a> {
     pub(super) html_comment_ranges: &'a [crate::utils::skip_context::ByteRange],
     pub(super) autodoc_ranges: &'a [crate::utils::skip_context::ByteRange],
-    pub(super) quarto_div_ranges: &'a [crate::utils::skip_context::ByteRange],
+    pub(super) pandoc_div_ranges: &'a [crate::utils::skip_context::ByteRange],
     pub(super) pymdown_block_ranges: &'a [crate::utils::skip_context::ByteRange],
 }
 
@@ -85,7 +85,8 @@ pub struct LintContext<'a> {
     pub source_file: Option<PathBuf>,     // Source file path (for rules that need file context)
     jsx_expression_ranges: Vec<(usize, usize)>, // Pre-computed JSX expression ranges (MDX: {expression})
     mdx_comment_ranges: Vec<(usize, usize)>, // Pre-computed MDX comment ranges ({/* ... */})
-    citation_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto citation ranges (Quarto: @key, [@key])
+    citation_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto citation ranges (@key, [@key])
+    pandoc_div_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto div block ranges (::: ... :::)
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -144,9 +145,9 @@ impl<'a> LintContext<'a> {
             crate::utils::mkdocstrings_refs::detect_autodoc_block_ranges(content)
         );
 
-        // Pre-compute Quarto div block ranges for Quarto flavor
-        let quarto_div_ranges = profile_section!("Quarto div ranges", profile, {
-            if flavor == MarkdownFlavor::Quarto {
+        // Pre-compute Pandoc/Quarto div block ranges for Pandoc-compatible flavors
+        let pandoc_div_ranges = profile_section!("Pandoc div ranges", profile, {
+            if flavor.is_pandoc_compatible() {
                 crate::utils::pandoc::detect_div_block_ranges(content)
             } else {
                 Vec::new()
@@ -167,7 +168,7 @@ impl<'a> LintContext<'a> {
         let skip_ranges = SkipByteRanges {
             html_comment_ranges: &html_comment_ranges,
             autodoc_ranges: &autodoc_ranges,
-            quarto_div_ranges: &quarto_div_ranges,
+            pandoc_div_ranges: &pandoc_div_ranges,
             pymdown_block_ranges: &pymdown_block_ranges,
         };
         let (mut lines, emphasis_spans) = profile_section!(
@@ -577,9 +578,9 @@ impl<'a> LintContext<'a> {
             crate::utils::jinja_utils::find_jinja_ranges(content)
         );
 
-        // Pre-compute Pandoc/Quarto citation ranges for Quarto flavor
+        // Pre-compute Pandoc/Quarto citation ranges for Pandoc-compatible flavors
         let citation_ranges = profile_section!("Citation ranges", profile, {
-            if flavor == MarkdownFlavor::Quarto {
+            if flavor.is_pandoc_compatible() {
                 crate::utils::pandoc::find_citation_ranges(content)
             } else {
                 Vec::new()
@@ -632,6 +633,7 @@ impl<'a> LintContext<'a> {
             jsx_expression_ranges,
             mdx_comment_ranges,
             citation_ranges,
+            pandoc_div_ranges,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1023,7 +1025,7 @@ impl<'a> LintContext<'a> {
     }
 
     /// Check if a byte position is within a Pandoc/Quarto citation (`@key` or `[@key]`).
-    /// Only active in Quarto flavor. O(log n).
+    /// Active for Pandoc-compatible flavors. O(log n).
     #[inline]
     pub fn is_in_citation(&self, byte_pos: usize) -> bool {
         let idx = self.citation_ranges.partition_point(|r| r.start <= byte_pos);
@@ -1034,6 +1036,14 @@ impl<'a> LintContext<'a> {
     #[inline]
     pub fn citation_ranges(&self) -> &[crate::utils::skip_context::ByteRange] {
         &self.citation_ranges
+    }
+
+    /// Check if a byte position is within a Pandoc/Quarto div block (`::: ... :::`).
+    /// Active for Pandoc-compatible flavors. O(log n) via binary search over sorted ranges.
+    #[inline]
+    pub fn is_in_div_block(&self, byte_pos: usize) -> bool {
+        let idx = self.pandoc_div_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.pandoc_div_ranges[idx - 1].end
     }
 
     /// Check if a byte position is within a Hugo/Quarto shortcode ({{< ... >}} or {{% ... %}}). O(log n).

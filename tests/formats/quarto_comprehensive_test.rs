@@ -22,17 +22,20 @@ Regular text.
     let ctx = LintContext::new(content, MarkdownFlavor::Quarto, None);
 
     // Line 0: heading - not in div
-    assert!(!ctx.lines[0].in_quarto_div, "Heading should not be in Quarto div");
+    assert!(
+        !ctx.lines[0].in_pandoc_div,
+        "Heading should not be in Pandoc/Quarto div"
+    );
     // Line 2: div opener - in div
-    assert!(ctx.lines[2].in_quarto_div, "Div opener should be in Quarto div");
+    assert!(ctx.lines[2].in_pandoc_div, "Div opener should be in Pandoc/Quarto div");
     // Line 3: content - in div
-    assert!(ctx.lines[3].in_quarto_div, "Div content should be in Quarto div");
+    assert!(ctx.lines[3].in_pandoc_div, "Div content should be in Pandoc/Quarto div");
     // Line 4: closer - in div
-    assert!(ctx.lines[4].in_quarto_div, "Div closer should be in Quarto div");
+    assert!(ctx.lines[4].in_pandoc_div, "Div closer should be in Pandoc/Quarto div");
     // Line 6: regular text - not in div
     assert!(
-        !ctx.lines[6].in_quarto_div,
-        "Text after div should not be in Quarto div"
+        !ctx.lines[6].in_pandoc_div,
+        "Text after div should not be in Pandoc/Quarto div"
     );
 }
 
@@ -51,13 +54,13 @@ Back to outer.
     let ctx = LintContext::new(content, MarkdownFlavor::Quarto, None);
 
     // All lines should be in some div context
-    assert!(ctx.lines[0].in_quarto_div, "Outer opener");
-    assert!(ctx.lines[1].in_quarto_div, "Outer content");
-    assert!(ctx.lines[3].in_quarto_div, "Inner opener");
-    assert!(ctx.lines[4].in_quarto_div, "Inner content");
-    assert!(ctx.lines[5].in_quarto_div, "Inner closer");
-    assert!(ctx.lines[7].in_quarto_div, "Back to outer");
-    assert!(ctx.lines[8].in_quarto_div, "Outer closer");
+    assert!(ctx.lines[0].in_pandoc_div, "Outer opener");
+    assert!(ctx.lines[1].in_pandoc_div, "Outer content");
+    assert!(ctx.lines[3].in_pandoc_div, "Inner opener");
+    assert!(ctx.lines[4].in_pandoc_div, "Inner content");
+    assert!(ctx.lines[5].in_pandoc_div, "Inner closer");
+    assert!(ctx.lines[7].in_pandoc_div, "Back to outer");
+    assert!(ctx.lines[8].in_pandoc_div, "Outer closer");
 }
 
 #[test]
@@ -74,11 +77,11 @@ Content for {callout_type}.
         let ctx = LintContext::new(&content, MarkdownFlavor::Quarto, None);
 
         assert!(
-            ctx.lines[0].in_quarto_div,
+            ctx.lines[0].in_pandoc_div,
             "Callout-{callout_type} opener should be detected"
         );
         assert!(
-            ctx.lines[1].in_quarto_div,
+            ctx.lines[1].in_pandoc_div,
             "Callout-{callout_type} content should be detected"
         );
     }
@@ -92,8 +95,8 @@ Content with ID and multiple classes.
 "#;
     let ctx = LintContext::new(content, MarkdownFlavor::Quarto, None);
 
-    assert!(ctx.lines[0].in_quarto_div, "Div with ID and classes");
-    assert!(ctx.lines[1].in_quarto_div, "Content in div with ID and classes");
+    assert!(ctx.lines[0].in_pandoc_div, "Div with ID and classes");
+    assert!(ctx.lines[1].in_pandoc_div, "Content in div with ID and classes");
 }
 
 #[test]
@@ -104,8 +107,8 @@ Content with attributes.
 "#;
     let ctx = LintContext::new(content, MarkdownFlavor::Quarto, None);
 
-    assert!(ctx.lines[0].in_quarto_div, "Div with attributes");
-    assert!(ctx.lines[1].in_quarto_div, "Content in div with attributes");
+    assert!(ctx.lines[0].in_pandoc_div, "Div with attributes");
+    assert!(ctx.lines[1].in_pandoc_div, "Content in div with attributes");
 }
 
 #[test]
@@ -117,9 +120,9 @@ More content.
     let ctx = LintContext::new(content, MarkdownFlavor::Quarto, None);
 
     // Unclosed div extends to end of document
-    assert!(ctx.lines[0].in_quarto_div, "Unclosed div opener");
-    assert!(ctx.lines[1].in_quarto_div, "Unclosed div content line 1");
-    assert!(ctx.lines[2].in_quarto_div, "Unclosed div content line 2");
+    assert!(ctx.lines[0].in_pandoc_div, "Unclosed div opener");
+    assert!(ctx.lines[1].in_pandoc_div, "Unclosed div content line 1");
+    assert!(ctx.lines[2].in_pandoc_div, "Unclosed div content line 2");
 }
 
 #[test]
@@ -131,8 +134,8 @@ Simple class syntax.
 "#;
     let ctx = LintContext::new(content, MarkdownFlavor::Quarto, None);
 
-    assert!(ctx.lines[0].in_quarto_div, "Simple class div opener");
-    assert!(ctx.lines[1].in_quarto_div, "Simple class div content");
+    assert!(ctx.lines[0].in_pandoc_div, "Simple class div opener");
+    assert!(ctx.lines[1].in_pandoc_div, "Simple class div content");
 }
 
 #[test]
@@ -145,7 +148,7 @@ This is a Quarto div.
 
     // Quarto divs should NOT be detected in Standard flavor
     assert!(
-        !ctx.lines[0].in_quarto_div,
+        !ctx.lines[0].in_pandoc_div,
         "Quarto divs should not be detected in Standard flavor"
     );
 }
@@ -159,7 +162,7 @@ This is a Quarto div.
     let ctx = LintContext::new(content, MarkdownFlavor::MkDocs, None);
 
     assert!(
-        !ctx.lines[0].in_quarto_div,
+        !ctx.lines[0].in_pandoc_div,
         "Quarto divs should not be detected in MkDocs flavor"
     );
 }
@@ -462,7 +465,7 @@ Content
     let ctx = LintContext::new(content, MarkdownFlavor::MDX, None);
 
     assert!(
-        !ctx.lines[0].in_quarto_div,
+        !ctx.lines[0].in_pandoc_div,
         "Quarto divs should not be detected in MDX flavor"
     );
 }
@@ -492,16 +495,16 @@ More content here.
 
     // Verify div detection
     let div_start = content.lines().position(|l| l.contains("callout-note")).unwrap();
-    assert!(ctx.lines[div_start].in_quarto_div, "Div opener detected");
+    assert!(ctx.lines[div_start].in_pandoc_div, "Div opener detected");
 
     // Verify citation in div
     let jones_line = content.lines().position(|l| l.contains("@jones2021")).unwrap();
-    assert!(ctx.lines[jones_line].in_quarto_div, "Content in div");
+    assert!(ctx.lines[jones_line].in_pandoc_div, "Content in div");
 
     // Verify math in div
     let math_line = content.lines().position(|l| l.contains("f(x)")).unwrap();
     assert!(ctx.lines[math_line].in_math_block, "Math block in div");
-    assert!(ctx.lines[math_line].in_quarto_div, "Math also in div context");
+    assert!(ctx.lines[math_line].in_pandoc_div, "Math also in div context");
 }
 
 // ====================================================================
@@ -515,8 +518,8 @@ fn test_quarto_empty_div() {
 "#;
     let ctx = LintContext::new(content, MarkdownFlavor::Quarto, None);
 
-    assert!(ctx.lines[0].in_quarto_div, "Empty div opener");
-    assert!(ctx.lines[1].in_quarto_div, "Empty div closer");
+    assert!(ctx.lines[0].in_pandoc_div, "Empty div opener");
+    assert!(ctx.lines[1].in_pandoc_div, "Empty div closer");
 }
 
 #[test]
@@ -528,10 +531,10 @@ fn test_quarto_div_with_only_whitespace() {
 "#;
     let ctx = LintContext::new(content, MarkdownFlavor::Quarto, None);
 
-    assert!(ctx.lines[0].in_quarto_div, "Div opener");
-    assert!(ctx.lines[1].in_quarto_div, "Blank line in div");
-    assert!(ctx.lines[2].in_quarto_div, "Whitespace line in div");
-    assert!(ctx.lines[3].in_quarto_div, "Div closer");
+    assert!(ctx.lines[0].in_pandoc_div, "Div opener");
+    assert!(ctx.lines[1].in_pandoc_div, "Blank line in div");
+    assert!(ctx.lines[2].in_pandoc_div, "Whitespace line in div");
+    assert!(ctx.lines[3].in_pandoc_div, "Div closer");
 }
 
 #[test]
@@ -589,7 +592,7 @@ Deep content.
     let lines: Vec<&str> = content.lines().collect();
     for (i, line_info) in ctx.lines.iter().enumerate() {
         if i < lines.len() && !lines[i].trim().is_empty() {
-            assert!(line_info.in_quarto_div, "Line {i} should be in div");
+            assert!(line_info.in_pandoc_div, "Line {i} should be in div");
         }
     }
 }
@@ -709,7 +712,7 @@ fn test_quarto_large_document_with_mixed_features() {
 
     // Check a specific div
     let note_10_line = content.lines().position(|l| l.contains("Note 10")).unwrap();
-    assert!(ctx.lines[note_10_line].in_quarto_div, "Note 10 should be in div");
+    assert!(ctx.lines[note_10_line].in_pandoc_div, "Note 10 should be in div");
 }
 
 // ====================================================================

@@ -215,7 +215,7 @@ impl Rule for MD012NoMultipleBlanks {
         // PyMdown blocks, and Obsidian comments.
         // The in_code_block field in LineInfo is pre-computed using pulldown-cmark
         // and correctly handles both fenced code blocks and indented code blocks.
-        // Flavor-specific fields (in_quarto_div, in_pymdown_block, in_obsidian_comment) are only
+        // Flavor-specific fields (in_pandoc_div, in_pymdown_block, in_obsidian_comment) are only
         // set for their respective flavors, so the skip filters have no effect otherwise.
         for filtered_line in ctx
             .filtered_lines()
