@@ -677,6 +677,85 @@ pub fn detect_yaml_metadata_block_ranges(content: &str) -> Vec<ByteRange> {
     ranges
 }
 
+// ============================================================================
+// Grid Table Support
+// ============================================================================
+//
+// Pandoc `grid_tables` extension: a contiguous block of lines where the
+// first line is a `+---+---+` border row (`+` corners, `-` or `=` between),
+// followed by alternating content rows (`| ... | ... |`) and border rows
+// (`+---+---+` or `+===+===+`), ending with a closing border row.
+// At least one content row is required for a valid grid table.
+
+/// Pattern for a grid-table border row: `+---+---+` or `+===+===+`.
+static GRID_BORDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\+(?:[-=]+\+)+\s*$").unwrap());
+
+/// Pattern for a grid-table content row: `| ... | ... |`.
+static GRID_CONTENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\|.*\|\s*$").unwrap());
+
+/// Detect Pandoc grid tables. A grid table is a contiguous run of lines
+/// where the first line is a `+---+---+` border, followed by alternating
+/// content rows `|...|` and border rows, and ending in a border row.
+/// At least one content row is required.
+///
+/// Iterates with `split_inclusive('\n')` so byte ranges remain accurate for
+/// content without a trailing newline and for CRLF line endings.
+pub fn detect_grid_table_ranges(content: &str) -> Vec<ByteRange> {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut line_offsets: Vec<usize> = Vec::new();
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        line_offsets.push(offset);
+        lines.push(line);
+        offset += line.len();
+    }
+    line_offsets.push(offset);
+
+    fn line_body(line: &str) -> &str {
+        line.trim_end_matches('\n').trim_end_matches('\r')
+    }
+    fn is_border(line: &str) -> bool {
+        GRID_BORDER.is_match(line_body(line))
+    }
+    fn is_content(line: &str) -> bool {
+        GRID_CONTENT.is_match(line_body(line))
+    }
+
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        if is_border(lines[i]) {
+            let start_line = i;
+            let mut j = i + 1;
+            let mut last_border = i;
+            let mut saw_content = false;
+            while j < lines.len() {
+                if is_border(lines[j]) {
+                    last_border = j;
+                    j += 1;
+                } else if is_content(lines[j]) {
+                    saw_content = true;
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            // A valid grid table needs at least one content row and a
+            // closing border (last_border > start_line).
+            if saw_content && last_border > start_line {
+                ranges.push(ByteRange {
+                    start: line_offsets[start_line],
+                    end: line_offsets[last_border + 1],
+                });
+                i = last_border + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    ranges
+}
+
 /// Detect Pandoc inline footnote ranges (`^[note text]`).
 ///
 /// Returns byte ranges covering the entire `^[...]` span. Intended for rules that
@@ -1444,5 +1523,77 @@ Warning content here.
         assert!(slugs.contains("another-heading"));
         assert!(!slugs.contains("this-is-a-bash-comment"));
         assert!(!slugs.iter().any(|s| s.contains("usr-bin")));
+    }
+
+    #[test]
+    fn test_detect_simple_grid_table() {
+        let content = "\
++---------+---------+
+| col1    | col2    |
++=========+=========+
+| a       | b       |
++---------+---------+
+";
+        let ranges = detect_grid_table_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_grid_table_with_surrounding_text() {
+        let content = "\
+Before.
+
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
++---+---+
+
+After.
+";
+        let ranges = detect_grid_table_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        let region = &content[ranges[0].start..ranges[0].end];
+        assert!(region.contains("+---+---+"));
+        assert!(!region.contains("Before"));
+        assert!(!region.contains("After"));
+    }
+
+    #[test]
+    fn test_lone_plus_dash_line_is_not_a_table() {
+        let content = "Just a +---+ in prose.\n";
+        let ranges = detect_grid_table_ranges(content);
+        assert_eq!(ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_grid_table_no_trailing_newline() {
+        // Block at end of file with no trailing newline; end must equal
+        // content length, not overshoot.
+        let content = "+---+---+\n| a | b |\n+---+---+\n| 1 | 2 |\n+---+---+";
+        let ranges = detect_grid_table_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_grid_table_crlf() {
+        // CRLF endings must produce correct byte offsets.
+        let content = "+---+---+\r\n| a | b |\r\n+---+---+\r\n| 1 | 2 |\r\n+---+---+\r\n";
+        let ranges = detect_grid_table_ranges(content);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges[0].end, content.len());
+    }
+
+    #[test]
+    fn test_grid_table_borders_only_no_content_row_rejected() {
+        // Two border lines with no content row must not form a valid table.
+        let content = "+---+\n+---+\n";
+        let ranges = detect_grid_table_ranges(content);
+        assert_eq!(ranges.len(), 0);
     }
 }

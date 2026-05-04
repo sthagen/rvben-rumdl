@@ -1716,3 +1716,38 @@ fn test_standard_flavor_skips_pandoc_metadata() {
     let pos = content.find("title").unwrap();
     assert!(!ctx.is_in_pandoc_metadata(pos));
 }
+
+#[test]
+fn test_pandoc_flavor_detects_grid_table() {
+    use crate::config::MarkdownFlavor;
+    let content = "\
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
++---+---+
+";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let pos = content.find("a").unwrap();
+    assert!(ctx.is_in_grid_table(pos));
+}
+
+#[test]
+fn test_pandoc_flavor_grid_table_excludes_surrounding_text() {
+    use crate::config::MarkdownFlavor;
+    let content = "Before.\n\n+---+---+\n| a | b |\n+---+---+\n\nAfter.\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    let before_pos = content.find("Before").unwrap();
+    let after_pos = content.find("After").unwrap();
+    assert!(!ctx.is_in_grid_table(before_pos));
+    assert!(!ctx.is_in_grid_table(after_pos));
+}
+
+#[test]
+fn test_standard_flavor_skips_grid_table() {
+    use crate::config::MarkdownFlavor;
+    let content = "+---+---+\n| a | b |\n+---+---+\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Standard, None);
+    let pos = content.find("a").unwrap();
+    assert!(!ctx.is_in_grid_table(pos));
+}

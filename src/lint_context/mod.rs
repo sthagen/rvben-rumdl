@@ -97,6 +97,7 @@ pub struct LintContext<'a> {
     line_block_ranges: Vec<crate::utils::skip_context::ByteRange>,     // Pre-computed Pandoc line block ranges (| text)
     pipe_table_caption_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc pipe-table caption ranges (: caption)
     pandoc_metadata_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc YAML metadata block ranges (--- ... --- or ...)
+    grid_table_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc grid-table ranges (+---+---+)
     shortcode_ranges: Vec<(usize, usize)>, // Pre-computed Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
     link_title_ranges: Vec<(usize, usize)>, // Pre-computed sorted link title byte ranges
     code_span_byte_ranges: Vec<(usize, usize)>, // Pre-computed code span byte ranges from pulldown-cmark
@@ -687,6 +688,15 @@ impl<'a> LintContext<'a> {
             }
         });
 
+        // Pre-compute Pandoc grid-table ranges (+---+---+) for Pandoc-compatible flavors
+        let grid_table_ranges = profile_section!("Grid table ranges", profile, {
+            if flavor.is_pandoc_compatible() {
+                crate::utils::pandoc::detect_grid_table_ranges(content)
+            } else {
+                Vec::new()
+            }
+        });
+
         // Pre-compute Hugo/Quarto shortcode ranges ({{< ... >}} and {{% ... %}})
         let shortcode_ranges = profile_section!("Shortcode ranges", profile, {
             use crate::utils::regex_cache::HUGO_SHORTCODE_REGEX;
@@ -744,6 +754,7 @@ impl<'a> LintContext<'a> {
             line_block_ranges,
             pipe_table_caption_ranges,
             pandoc_metadata_ranges,
+            grid_table_ranges,
             shortcode_ranges,
             link_title_ranges,
             code_span_byte_ranges: code_span_ranges,
@@ -1228,6 +1239,14 @@ impl<'a> LintContext<'a> {
     pub fn is_in_pandoc_metadata(&self, byte_pos: usize) -> bool {
         let idx = self.pandoc_metadata_ranges.partition_point(|r| r.start <= byte_pos);
         idx > 0 && byte_pos < self.pandoc_metadata_ranges[idx - 1].end
+    }
+
+    /// Returns true if `byte_pos` falls inside a Pandoc grid table.
+    /// Active for Pandoc-compatible flavors. O(log n).
+    #[inline]
+    pub fn is_in_grid_table(&self, byte_pos: usize) -> bool {
+        let idx = self.grid_table_ranges.partition_point(|r| r.start <= byte_pos);
+        idx > 0 && byte_pos < self.grid_table_ranges[idx - 1].end
     }
 
     /// Returns true if `link_text` slugifies to a heading present in the document.
