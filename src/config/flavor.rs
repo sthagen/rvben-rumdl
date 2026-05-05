@@ -320,6 +320,7 @@ mod tests {
         assert!(MarkdownFlavor::AzureDevOps.supports_colon_code_fences());
         assert!(!MarkdownFlavor::Standard.supports_colon_code_fences());
         assert!(!MarkdownFlavor::MkDocs.supports_colon_code_fences());
+        assert!(!MarkdownFlavor::MDX.supports_colon_code_fences());
         assert!(!MarkdownFlavor::Pandoc.supports_colon_code_fences());
         assert!(!MarkdownFlavor::Quarto.supports_colon_code_fences());
         assert!(!MarkdownFlavor::Obsidian.supports_colon_code_fences());
