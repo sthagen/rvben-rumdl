@@ -66,6 +66,9 @@ fn test_flavor_cli_all_variants() {
         "obsidian",
         "kramdown",
         "jekyll",
+        "azure_devops",
+        "azure",
+        "ado",
     ] {
         let (success, stdout, stderr) = run_rumdl(temp_dir.path(), &["check", "--flavor", flavor, "test.md"]);
         assert!(
@@ -617,5 +620,25 @@ reflow = true
          instead of per-file flavor (mkdocs), failing to recognize admonition content.\n\
          Fixed content:\n{fixed_content}\n\
          stderr: {stderr}"
+    );
+}
+
+/// End-to-end test: Azure DevOps flavor suppresses MD013 inside colon fences.
+///
+/// In Azure DevOps Markdown, colon fences (`::: mermaid ... :::`) are code blocks.
+/// Lines inside those fences should not trigger MD013 line-length warnings.
+#[test]
+fn test_flavor_azure_devops_suppresses_md013_in_colon_fence() {
+    let temp_dir = tempdir().unwrap();
+    let md_path = temp_dir.path().join("test.md");
+    // Very long line inside a colon fence — should not trigger MD013
+    let long_line = "A".repeat(150);
+    let content = format!("# Diagram\n\n::: mermaid\n{long_line}\n:::\n");
+    fs::write(&md_path, &content).unwrap();
+
+    let (success, stdout, stderr) = run_rumdl(temp_dir.path(), &["check", "--flavor", "azure_devops", "test.md"]);
+    assert!(
+        success,
+        "Should pass with no warnings. stderr: {stderr}, stdout: {stdout}"
     );
 }

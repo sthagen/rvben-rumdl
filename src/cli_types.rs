@@ -413,6 +413,8 @@ pub enum Flavor {
     Obsidian,
     #[value(alias("jekyll"))]
     Kramdown,
+    #[value(name = "azure_devops", aliases(["azure", "ado"]))]
+    AzureDevOps,
 }
 
 impl From<Flavor> for rumdl_lib::config::MarkdownFlavor {
@@ -425,6 +427,7 @@ impl From<Flavor> for rumdl_lib::config::MarkdownFlavor {
             Flavor::Quarto => Self::Quarto,
             Flavor::Obsidian => Self::Obsidian,
             Flavor::Kramdown => Self::Kramdown,
+            Flavor::AzureDevOps => Self::AzureDevOps,
         }
     }
 }
