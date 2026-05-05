@@ -69,7 +69,7 @@ respect-gitignore = false
 # Set global line length (used by MD013 and other line-length rules)
 line-length = 120
 
-# Set markdown flavor (standard, mkdocs)
+# Set markdown flavor (standard, gfm, mkdocs, mdx, pandoc, quarto, kramdown, azure_devops)
 flavor = "mkdocs"
 
 # Per-file flavor overrides (pattern → flavor)
@@ -764,8 +764,9 @@ flavor = "mkdocs"  # Use MkDocs flavor
 - `"mkdocs"`: MkDocs-specific extensions (admonitions, content tabs, autorefs, mkdocstrings)
 - `"mdx"`: MDX with JSX components, attributes, expressions, and ESM imports
 - `"quarto"`: Quarto/RMarkdown for scientific publishing (citations, shortcodes, div blocks)
+- `"azure_devops"`: Azure DevOps wikis — treats `:::mermaid` blocks as opaque code fences
 
-**Aliases**: `"commonmark"` is an alias for `"standard"`, `"github"` is an alias for `"gfm"`
+**Aliases**: `"commonmark"` is an alias for `"standard"`, `"github"` is an alias for `"gfm"`, `"azure"` and `"ado"` are aliases for `"azure_devops"`
 
 **Behavior**:
 
@@ -781,6 +782,7 @@ flavor = "mkdocs"  # Use MkDocs flavor
 - Use `mkdocs` for MkDocs or Material for MkDocs projects
 - Use `mdx` for React/Next.js documentation with JSX components
 - Use `quarto` for scientific documents with R/Python code execution
+- Use `azure_devops` (or `azure` / `ado`) for Azure DevOps wiki content with `:::mermaid` blocks
 
 **Example CLI usage**:
 
