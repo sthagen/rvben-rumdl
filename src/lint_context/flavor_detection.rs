@@ -804,3 +804,208 @@ where
     // Silence unused warning for content (needed for signature consistency)
     let _ = content;
 }
+
+/// Count leading ASCII space characters (tabs do not count).
+fn count_leading_spaces(s: &str) -> usize {
+    s.bytes().take_while(|&b| b == b' ').count()
+}
+
+/// A colon fence opener is 0–3 leading spaces, then `:::`, then at least one
+/// non-whitespace character. Tabs before `:::` disqualify the line.
+fn is_colon_fence_opener(line: &str) -> bool {
+    let spaces = count_leading_spaces(line);
+    if spaces > 3 {
+        return false;
+    }
+    let rest = &line[spaces..];
+    if rest.starts_with('\t') {
+        return false;
+    }
+    rest.starts_with(":::") && !rest[3..].trim().is_empty()
+}
+
+/// A colon fence closer is 0–3 leading spaces, then `:::`, then only whitespace.
+fn is_colon_fence_closer(line: &str) -> bool {
+    let spaces = count_leading_spaces(line);
+    if spaces > 3 {
+        return false;
+    }
+    let rest = &line[spaces..];
+    if rest.starts_with('\t') {
+        return false;
+    }
+    rest.starts_with(":::") && rest[3..].trim().is_empty()
+}
+
+/// Detect Azure DevOps colon code fences (`:::lang … :::`) and mark their
+/// lines as `in_code_block`. Returns byte ranges for each detected fence so
+/// the caller can extend `code_blocks` for byte-range consumers.
+///
+/// Only runs when `flavor.supports_colon_code_fences()`. Skips lines already
+/// in front matter or HTML comments. Nesting is not supported — the first bare
+/// `:::` after an opener closes the block.
+pub(super) fn detect_azure_colon_fences(
+    content: &str,
+    lines: &mut [LineInfo],
+    flavor: MarkdownFlavor,
+) -> Vec<(usize, usize)> {
+    if !flavor.supports_colon_code_fences() {
+        return Vec::new();
+    }
+
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut fence_byte_start: Option<usize> = None;
+
+    for line in lines.iter_mut() {
+        if line.in_front_matter || line.in_html_comment {
+            continue;
+        }
+
+        let line_content = line.content(content);
+
+        if fence_byte_start.is_none() {
+            if is_colon_fence_opener(line_content) {
+                fence_byte_start = Some(line.byte_offset);
+                line.in_code_block = true;
+            }
+        } else {
+            // Inside an open fence — mark everything as code.
+            line.in_code_block = true;
+
+            if is_colon_fence_closer(line_content) {
+                let start = fence_byte_start.take().unwrap();
+                // End is exclusive: byte after the last byte of the closer line
+                // (including its newline if present).
+                let end = (line.byte_offset + line.byte_len + 1).min(content.len());
+                ranges.push((start, end));
+            }
+        }
+    }
+
+    // Unclosed fence — extend to end of document.
+    if let Some(start) = fence_byte_start {
+        ranges.push((start, content.len()));
+    }
+
+    ranges
+}
+
+#[cfg(test)]
+mod colon_fence_tests {
+    use crate::config::MarkdownFlavor;
+    use crate::lint_context::LintContext;
+
+    fn azure_ctx(content: &str) -> LintContext<'_> {
+        LintContext::new(content, MarkdownFlavor::AzureDevOps, None)
+    }
+
+    fn standard_ctx(content: &str) -> LintContext<'_> {
+        LintContext::new(content, MarkdownFlavor::Standard, None)
+    }
+
+    #[test]
+    fn test_colon_fence_basic_marks_content_as_code_block() {
+        let content = "::: mermaid\nflowchart LR\n    A --> B\n:::\n";
+        let ctx = azure_ctx(content);
+        assert!(ctx.lines[0].in_code_block, "opener should be in_code_block");
+        assert!(ctx.lines[1].in_code_block, "content should be in_code_block");
+        assert!(ctx.lines[2].in_code_block, "content should be in_code_block");
+        assert!(ctx.lines[3].in_code_block, "closer should be in_code_block");
+    }
+
+    #[test]
+    fn test_colon_fence_no_space_variant() {
+        let content = ":::mermaid\ndata\n:::\n";
+        let ctx = azure_ctx(content);
+        assert!(ctx.lines[0].in_code_block);
+        assert!(ctx.lines[1].in_code_block);
+        assert!(ctx.lines[2].in_code_block);
+    }
+
+    #[test]
+    fn test_colon_fence_space_variant() {
+        let content = "::: mermaid\ndata\n:::\n";
+        let ctx = azure_ctx(content);
+        assert!(ctx.lines[0].in_code_block);
+        assert!(ctx.lines[1].in_code_block);
+        assert!(ctx.lines[2].in_code_block);
+    }
+
+    #[test]
+    fn test_bare_colon_without_opener_is_not_a_block() {
+        let content = "Some text\n:::\nMore text\n";
+        let ctx = azure_ctx(content);
+        assert!(!ctx.lines[0].in_code_block);
+        assert!(
+            !ctx.lines[1].in_code_block,
+            "bare ::: without opener should not be code block"
+        );
+        assert!(!ctx.lines[2].in_code_block);
+    }
+
+    #[test]
+    fn test_four_leading_spaces_is_not_opener() {
+        let content = "    ::: mermaid\ndata\n:::\n";
+        let ctx = azure_ctx(content);
+        // 4 spaces = indented code, not a colon opener
+        assert!(!ctx.lines[1].in_code_block, "content should not be in_code_block");
+    }
+
+    #[test]
+    fn test_three_leading_spaces_is_opener() {
+        let content = "   ::: mermaid\ndata\n   :::\n";
+        let ctx = azure_ctx(content);
+        assert!(ctx.lines[0].in_code_block);
+        assert!(ctx.lines[1].in_code_block);
+        assert!(ctx.lines[2].in_code_block);
+    }
+
+    #[test]
+    fn test_colon_fence_inside_front_matter_ignored() {
+        let content = "---\ntitle: test\n---\n::: mermaid\ndata\n:::\n";
+        let ctx = azure_ctx(content);
+        // Front matter lines 0-2 are in_front_matter; colon block starts at line 3
+        assert!(ctx.lines[3].in_code_block);
+        assert!(ctx.lines[4].in_code_block);
+        assert!(ctx.lines[5].in_code_block);
+    }
+
+    #[test]
+    fn test_standard_flavor_does_not_treat_colon_as_code_block() {
+        let content = "::: mermaid\nflowchart LR\n    A --> B\n:::\n";
+        let ctx = standard_ctx(content);
+        for line in &ctx.lines {
+            assert!(
+                !line.in_code_block,
+                "standard flavor should not mark colon blocks as code"
+            );
+        }
+    }
+
+    #[test]
+    fn test_colon_fence_byte_ranges_in_code_blocks() {
+        let content = "text\n::: mermaid\ndiagram\n:::\nafter\n";
+        let ctx = azure_ctx(content);
+        let diagram_line_start = ctx.lines[2].byte_offset;
+        let in_block = ctx
+            .code_blocks
+            .iter()
+            .any(|&(s, e)| diagram_line_start >= s && diagram_line_start < e);
+        assert!(in_block, "diagram line should be in code_blocks byte ranges");
+    }
+
+    #[test]
+    fn test_colon_fence_content_not_flagged_by_md013() {
+        use crate::rule::Rule;
+        use crate::rules::md013_line_length::MD013LineLength;
+        let long_line = "A".repeat(200);
+        let content = format!("::: mermaid\n{long_line}\n:::\n");
+        let ctx = azure_ctx(&content);
+        let rule = MD013LineLength::default();
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "MD013 should not fire inside colon fence: {warnings:?}"
+        );
+    }
+}
