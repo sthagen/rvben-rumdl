@@ -34,6 +34,12 @@ struct IndentContext<'a> {
     /// With this, the rule recognizes them, and the fence converter can emit
     /// fences at `baseline` spaces so the block stays attached to the bullet.
     list_item_baseline: &'a [Option<usize>],
+    /// Lines inside Azure DevOps colon code fences — excluded from style detection.
+    ///
+    /// Fence markers (``` or ~~~) that appear inside a `:::` colon fence are
+    /// verbatim content, not real code block delimiters. Including them in the
+    /// style tally would corrupt `detect_style`'s fenced/indented counts.
+    in_colon_fence: &'a [bool],
 }
 
 /// Rule MD046: Code block style
@@ -437,6 +443,30 @@ impl MD046CodeBlockStyle {
             .collect()
     }
 
+    /// Pre-compute which lines fall inside an Azure DevOps colon code fence (`:::`)
+    ///
+    /// Fence markers (``` or ~~~) that appear inside a `:::` block are verbatim
+    /// content, not real code block delimiters. Marking these lines lets
+    /// `detect_style` skip them so they cannot skew the fenced/indented tally.
+    fn precompute_colon_fence_context(ctx: &crate::lint_context::LintContext, num_lines: usize) -> Vec<bool> {
+        if !ctx.flavor.supports_colon_code_fences() {
+            return vec![false; num_lines];
+        }
+        let mut result = vec![false; num_lines];
+        for &(start, end) in ctx.colon_fence_ranges() {
+            let start_line = ctx.line_offsets.partition_point(|&off| off <= start).saturating_sub(1);
+            let end_byte = if end > 0 { end - 1 } else { 0 };
+            let end_line = ctx
+                .line_offsets
+                .partition_point(|&off| off <= end_byte)
+                .saturating_sub(1);
+            for i in start_line..=end_line.min(num_lines.saturating_sub(1)) {
+                result[i] = true;
+            }
+        }
+        result
+    }
+
     /// Pre-compute which lines are in MkDocs tab context with a single forward pass
     fn precompute_mkdocs_tab_context(&self, lines: &[&str]) -> Vec<bool> {
         let mut in_tab_context = vec![false; lines.len()];
@@ -735,6 +765,15 @@ impl MD046CodeBlockStyle {
         for (i, line) in lines.iter().enumerate() {
             let in_container = ictx.in_comment_or_html.get(i).copied().unwrap_or(false);
 
+            // Lines inside Azure DevOps colon code fences are verbatim content.
+            // Any fence markers they contain are not real block delimiters and
+            // must not influence the fenced/indented style tally.
+            let in_colon = ictx.in_colon_fence.get(i).copied().unwrap_or(false);
+            if in_colon {
+                prev_was_indented = false;
+                continue;
+            }
+
             if self.is_fenced_code_block_start(line) {
                 if in_container {
                     // Fence marker inside a container — not a real fence,
@@ -830,12 +869,14 @@ impl Rule for MD046CodeBlockStyle {
                 } else {
                     vec![false; lines.len()]
                 };
+                let in_colon_fence = Self::precompute_colon_fence_context(ctx, lines.len());
                 let ictx = IndentContext {
                     in_list_context: &in_list_context,
                     in_tab_context: &in_tab_context,
                     in_admonition_context: &in_admonition_context,
                     in_comment_or_html: &in_comment_or_html,
                     list_item_baseline: &list_item_baseline,
+                    in_colon_fence: &in_colon_fence,
                 };
                 self.detect_style(lines, is_mkdocs, &ictx)
                     .unwrap_or(CodeBlockStyle::Fenced)
@@ -958,12 +999,14 @@ impl Rule for MD046CodeBlockStyle {
             vec![false; lines.len()]
         };
 
+        let in_colon_fence_fix = Self::precompute_colon_fence_context(ctx, lines.len());
         let ictx = IndentContext {
             in_list_context: &in_list_context,
             in_tab_context: &in_tab_context,
             in_admonition_context: &in_admonition_context,
             in_comment_or_html: &in_comment_or_html,
             list_item_baseline: &list_item_baseline,
+            in_colon_fence: &in_colon_fence_fix,
         };
 
         let target_style = match self.config.style {
@@ -1243,12 +1286,16 @@ mod tests {
         // recognized must drive the rule through `check`/`fix` with a real
         // `LintContext`.
         let list_item_baseline: Vec<Option<usize>> = vec![None; lines.len()];
+        // Colon fence context is not populated by this helper — tests that
+        // need colon fence exclusion must use the full `check` entry point.
+        let in_colon_fence_test = vec![false; lines.len()];
         let ictx = IndentContext {
             in_list_context: &in_list_context,
             in_tab_context: &in_tab_context,
             in_admonition_context: &in_admonition_context,
             in_comment_or_html: &in_comment_or_html,
             list_item_baseline: &list_item_baseline,
+            in_colon_fence: &in_colon_fence_test,
         };
         rule.detect_style(&lines, is_mkdocs, &ictx)
     }
