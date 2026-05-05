@@ -43,14 +43,17 @@ pub enum MarkdownFlavor {
     /// Kramdown flavor for Jekyll sites with IAL, ALD, and extension block support
     #[serde(rename = "kramdown")]
     Kramdown,
+    /// Azure DevOps flavor — treats `:::lang` blocks as opaque code fences
+    #[serde(rename = "azure_devops", alias = "azure", alias = "ado")]
+    AzureDevOps,
 }
 
 /// Custom JSON schema for MarkdownFlavor that includes all accepted values and aliases
 fn markdown_flavor_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
-        "description": "Markdown flavor/dialect. Accepts: standard, gfm, mkdocs, mdx, pandoc, quarto, obsidian, kramdown. Aliases: commonmark/github map to standard, qmd/rmd/rmarkdown map to quarto, jekyll maps to kramdown.",
+        "description": "Markdown flavor/dialect. Accepts: standard, gfm, mkdocs, mdx, pandoc, quarto, obsidian, kramdown, azure_devops. Aliases: commonmark/github map to standard, qmd/rmd/rmarkdown map to quarto, jekyll maps to kramdown, azure/ado map to azure_devops.",
         "type": "string",
-        "enum": ["standard", "gfm", "github", "commonmark", "mkdocs", "mdx", "pandoc", "quarto", "qmd", "rmd", "rmarkdown", "obsidian", "kramdown", "jekyll"]
+        "enum": ["standard", "gfm", "github", "commonmark", "mkdocs", "mdx", "pandoc", "quarto", "qmd", "rmd", "rmarkdown", "obsidian", "kramdown", "jekyll", "azure_devops", "azure", "ado"]
     })
 }
 
@@ -74,6 +77,7 @@ impl fmt::Display for MarkdownFlavor {
             MarkdownFlavor::Quarto => write!(f, "quarto"),
             MarkdownFlavor::Obsidian => write!(f, "obsidian"),
             MarkdownFlavor::Kramdown => write!(f, "kramdown"),
+            MarkdownFlavor::AzureDevOps => write!(f, "azure_devops"),
         }
     }
 }
@@ -90,6 +94,7 @@ impl FromStr for MarkdownFlavor {
             "quarto" | "qmd" | "rmd" | "rmarkdown" => Ok(MarkdownFlavor::Quarto),
             "obsidian" => Ok(MarkdownFlavor::Obsidian),
             "kramdown" | "jekyll" => Ok(MarkdownFlavor::Kramdown),
+            "azure_devops" | "azure" | "ado" => Ok(MarkdownFlavor::AzureDevOps),
             // GFM and CommonMark are aliases for Standard since the base parser
             // (pulldown-cmark) already supports GFM extensions (tables, task lists,
             // strikethrough, autolinks, etc.) which are a superset of CommonMark
@@ -168,7 +173,13 @@ impl MarkdownFlavor {
             Self::Quarto => "Quarto",
             Self::Obsidian => "Obsidian",
             Self::Kramdown => "Kramdown",
+            Self::AzureDevOps => "AzureDevOps",
         }
+    }
+
+    /// True only for Azure DevOps flavor, which uses `:::lang` as a code fence.
+    pub fn supports_colon_code_fences(self) -> bool {
+        matches!(self, Self::AzureDevOps)
     }
 }
 
@@ -210,6 +221,7 @@ mod tests {
             (MarkdownFlavor::Quarto, "quarto"),
             (MarkdownFlavor::Obsidian, "obsidian"),
             (MarkdownFlavor::Kramdown, "kramdown"),
+            (MarkdownFlavor::AzureDevOps, "azure_devops"),
         ];
         for (variant, expected) in cases {
             let displayed = variant.to_string();
@@ -237,6 +249,7 @@ mod tests {
             MarkdownFlavor::Quarto,
             MarkdownFlavor::Obsidian,
             MarkdownFlavor::Kramdown,
+            MarkdownFlavor::AzureDevOps,
         ];
         for variant in variants {
             let displayed = variant.to_string();
@@ -279,5 +292,48 @@ mod tests {
         assert!(!MarkdownFlavor::MDX.is_pandoc_compatible());
         assert!(!MarkdownFlavor::Obsidian.is_pandoc_compatible());
         assert!(!MarkdownFlavor::Kramdown.is_pandoc_compatible());
+    }
+
+    #[test]
+    fn test_azure_devops_from_str() {
+        assert_eq!(
+            "azure_devops".parse::<MarkdownFlavor>().unwrap(),
+            MarkdownFlavor::AzureDevOps
+        );
+        assert_eq!("azure".parse::<MarkdownFlavor>().unwrap(), MarkdownFlavor::AzureDevOps);
+        assert_eq!("ado".parse::<MarkdownFlavor>().unwrap(), MarkdownFlavor::AzureDevOps);
+        assert_eq!(
+            "AZURE_DEVOPS".parse::<MarkdownFlavor>().unwrap(),
+            MarkdownFlavor::AzureDevOps
+        );
+    }
+
+    #[test]
+    fn test_azure_devops_display_and_round_trip() {
+        assert_eq!(MarkdownFlavor::AzureDevOps.to_string(), "azure_devops");
+        let parsed: MarkdownFlavor = "azure_devops".parse().unwrap();
+        assert_eq!(parsed, MarkdownFlavor::AzureDevOps);
+    }
+
+    #[test]
+    fn test_supports_colon_code_fences() {
+        assert!(MarkdownFlavor::AzureDevOps.supports_colon_code_fences());
+        assert!(!MarkdownFlavor::Standard.supports_colon_code_fences());
+        assert!(!MarkdownFlavor::MkDocs.supports_colon_code_fences());
+        assert!(!MarkdownFlavor::Pandoc.supports_colon_code_fences());
+        assert!(!MarkdownFlavor::Quarto.supports_colon_code_fences());
+        assert!(!MarkdownFlavor::Obsidian.supports_colon_code_fences());
+        assert!(!MarkdownFlavor::Kramdown.supports_colon_code_fences());
+    }
+
+    #[test]
+    fn test_azure_devops_not_pandoc_compatible() {
+        assert!(!MarkdownFlavor::AzureDevOps.is_pandoc_compatible());
+    }
+
+    #[test]
+    fn test_display_all_variants_covers_azure_devops() {
+        let displayed = MarkdownFlavor::AzureDevOps.to_string();
+        assert!(displayed.chars().all(|c| !c.is_ascii_uppercase()));
     }
 }
