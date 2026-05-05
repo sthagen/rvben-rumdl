@@ -497,13 +497,43 @@ mod tests {
     #[test]
     fn test_trailing_only_kebab_accepts_conforming_table() {
         let rule = rule_from_toml_style("trailing-only");
-        let content = "A | B |\n---|--- |\n1 | 2 |";
+        let content = "A | B |\n---|---|\n1 | 2 |";
         let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
         let warnings = rule.check(&ctx).unwrap();
         assert!(
             warnings.is_empty(),
             "trailing-only should accept a trailing-only table: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn test_trailing_only_kebab_rejects_nonconforming_table() {
+        let rule = rule_from_toml_style("trailing-only");
+        // leading-and-trailing table must be flagged — proves the table is actually detected
+        let content = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(
+            warnings.len(),
+            3,
+            "trailing-only should flag all 3 rows that have leading pipes"
+        );
+        assert!(warnings.iter().all(|w| w.message.contains("trailing only")));
+    }
+
+    #[test]
+    fn test_leading_only_kebab_rejects_nonconforming_table() {
+        let rule = rule_from_toml_style("leading-only");
+        // trailing-only table must be flagged — proves the table is actually detected
+        let content = "A | B |\n---|---|\n1 | 2 |";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(
+            warnings.len(),
+            3,
+            "leading-only should flag all 3 rows that have trailing pipes"
+        );
+        assert!(warnings.iter().all(|w| w.message.contains("leading only")));
     }
 
     #[test]
@@ -520,13 +550,15 @@ mod tests {
 
     #[test]
     fn test_kebab_and_snake_case_styles_are_equivalent() {
-        // For every style, kebab and snake_case forms must produce identical warnings.
+        // For every style, kebab and snake_case forms must produce identical warnings —
+        // same count, same messages, same line numbers.
         let pairs = [
             ("no-leading-or-trailing", "no_leading_or_trailing"),
             ("leading-only", "leading_only"),
             ("trailing-only", "trailing_only"),
             ("leading-and-trailing", "leading_and_trailing"),
         ];
+        // Mixed table so every style produces at least one warning, exercising the message path.
         let content = "| A | B |\n|---|---|\n| 1 | 2 |";
         let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
 
@@ -535,12 +567,58 @@ mod tests {
             let snake_rule = rule_from_toml_style(snake);
             let kebab_warnings = kebab_rule.check(&ctx).unwrap();
             let snake_warnings = snake_rule.check(&ctx).unwrap();
+
             assert_eq!(
                 kebab_warnings.len(),
                 snake_warnings.len(),
                 "'{kebab}' and '{snake}' must produce the same number of warnings"
             );
+            for (i, (kw, sw)) in kebab_warnings.iter().zip(snake_warnings.iter()).enumerate() {
+                assert_eq!(
+                    kw.message, sw.message,
+                    "warning[{i}] message differs between '{kebab}' and '{snake}'"
+                );
+                assert_eq!(
+                    kw.line, sw.line,
+                    "warning[{i}] line differs between '{kebab}' and '{snake}'"
+                );
+            }
         }
+    }
+
+    fn assert_fix_roundtrip_from_toml(style: &str, content: &str) {
+        let rule = rule_from_toml_style(style);
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let fixed = rule.fix(&ctx).unwrap();
+        let ctx2 = crate::lint_context::LintContext::new(&fixed, crate::config::MarkdownFlavor::Standard, None);
+        let remaining = rule.check(&ctx2).unwrap();
+        assert!(
+            remaining.is_empty(),
+            "style '{style}': after fix(), check() should find 0 violations.\n\
+             Original: {content:?}\n\
+             Fixed:    {fixed:?}\n\
+             Remaining: {remaining:?}"
+        );
+    }
+
+    #[test]
+    fn test_roundtrip_kebab_no_leading_or_trailing() {
+        assert_fix_roundtrip_from_toml("no-leading-or-trailing", "| H1 | H2 |\n|---|---|\n| a | b |");
+    }
+
+    #[test]
+    fn test_roundtrip_kebab_leading_and_trailing() {
+        assert_fix_roundtrip_from_toml("leading-and-trailing", "H1 | H2\n---|---\na | b");
+    }
+
+    #[test]
+    fn test_roundtrip_kebab_leading_only() {
+        assert_fix_roundtrip_from_toml("leading-only", "| H1 | H2 |\n|---|---|\n| a | b |");
+    }
+
+    #[test]
+    fn test_roundtrip_kebab_trailing_only() {
+        assert_fix_roundtrip_from_toml("trailing-only", "| H1 | H2 |\n|---|---|\n| a | b |");
     }
 
     #[test]
