@@ -460,8 +460,12 @@ impl MD046CodeBlockStyle {
                 .line_offsets
                 .partition_point(|&off| off <= end_byte)
                 .saturating_sub(1);
-            for i in start_line..=end_line.min(num_lines.saturating_sub(1)) {
-                result[i] = true;
+            for item in result
+                .iter_mut()
+                .take(end_line.min(num_lines.saturating_sub(1)) + 1)
+                .skip(start_line)
+            {
+                *item = true;
             }
         }
         result
