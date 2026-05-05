@@ -87,3 +87,105 @@ fn test_md048_colon_fence_with_inner_backtick_not_counted() {
         "MD048 should not flag colon fence content: {warnings:?}"
     );
 }
+
+#[test]
+fn test_colon_fence_only_opaque_in_azure_flavor() {
+    // In Azure DevOps flavor, ::: fences mark lines as code blocks.
+    // In Standard flavor, the same lines are plain prose (not code blocks).
+    let content = "::: mermaid\ngraph TD\n:::\n";
+
+    let azure = azure_ctx(content);
+    // Opener line and content line are both in_code_block in Azure flavor
+    assert!(
+        azure.lines[0].in_code_block,
+        "azure: fence opener must be in_code_block"
+    );
+    assert!(
+        azure.lines[1].in_code_block,
+        "azure: fence content must be in_code_block"
+    );
+
+    let standard = LintContext::new(content, MarkdownFlavor::Standard, None);
+    // Standard has no colon fence concept — lines are regular prose
+    assert!(
+        !standard.lines[0].in_code_block,
+        "standard: ::: line must not be in_code_block"
+    );
+    assert!(
+        !standard.lines[1].in_code_block,
+        "standard: content must not be in_code_block"
+    );
+}
+
+#[test]
+fn test_link_parser_does_not_flag_content_inside_colon_fence() {
+    use rumdl_lib::rules::MD034NoBareUrls;
+
+    let content = "::: mermaid\nA --> https://example.com/very/long/path\n:::\n";
+    let ctx = azure_ctx(content);
+    let rule = MD034NoBareUrls::default();
+    let warnings = rule.check(&ctx).unwrap();
+    assert!(
+        warnings.is_empty(),
+        "MD034 must not flag URLs inside colon fence: {warnings:?}"
+    );
+}
+
+#[test]
+fn test_multiple_colon_fences_in_document() {
+    use rumdl_lib::rules::MD013LineLength;
+
+    let long = "A".repeat(150);
+    let content = format!("# Heading\n\n::: mermaid\n{long}\n:::\n\nNormal paragraph.\n\n::: mermaid\n{long}\n:::\n");
+    let ctx = azure_ctx(&content);
+    let rule = MD013LineLength::default();
+    let warnings = rule.check(&ctx).unwrap();
+    assert!(
+        warnings.is_empty(),
+        "MD013 must not fire in any colon fence: {warnings:?}"
+    );
+}
+
+#[test]
+fn test_pandoc_flavor_not_affected() {
+    // In Pandoc flavor, ::: is a fenced div — content is regular Markdown, not a code block.
+    // This contrasts with Azure DevOps where ::: marks opaque code blocks.
+    let content = "::: note\ngraph TD\n:::\n";
+    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
+    // Content inside Pandoc fenced divs is NOT in_code_block (it's still lintable Markdown)
+    assert!(
+        !ctx.lines[1].in_code_block,
+        "Pandoc: fenced div content must not be in_code_block"
+    );
+    // The ::: opener in Pandoc flavor should also not be in_code_block
+    assert!(
+        !ctx.lines[0].in_code_block,
+        "Pandoc: fenced div opener must not be in_code_block"
+    );
+}
+
+#[test]
+fn test_unclosed_colon_fence_does_not_panic() {
+    // Unclosed fence — detection should handle gracefully
+    let content = "::: mermaid\ndiagram content\n";
+    let ctx = azure_ctx(content);
+    // All lines after opener should be marked as code block
+    assert!(ctx.lines[0].in_code_block);
+    assert!(ctx.lines[1].in_code_block);
+}
+
+#[test]
+fn test_autodoc_marker_treated_as_code_fence_in_azure_flavor() {
+    use rumdl_lib::rules::MD013LineLength;
+
+    // ::: module.Class looks like autodoc but should be treated as code fence in azure flavor
+    let long = "A".repeat(150);
+    let content = format!("::: module.Class\n{long}\n:::\n");
+    let ctx = azure_ctx(&content);
+    let rule = MD013LineLength::default();
+    let warnings = rule.check(&ctx).unwrap();
+    assert!(
+        warnings.is_empty(),
+        "azure_devops: ::: module.Class should be opaque code fence"
+    );
+}
