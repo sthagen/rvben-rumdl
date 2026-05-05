@@ -188,3 +188,79 @@ fn test_autodoc_marker_treated_as_code_fence_in_azure_flavor() {
         "azure_devops: ::: module.Class should be opaque code fence"
     );
 }
+
+#[test]
+fn test_tab_indented_opener_is_not_a_colon_fence() {
+    // A tab before ::: is not a valid opener — tabs are not counted as indentation.
+    // Note: pulldown-cmark may mark the tab-indented line itself as in_code_block via
+    // CommonMark's indented-code-block rule (tab = 4 spaces), but no colon fence range
+    // should be created and the subsequent content line must not be in_code_block.
+    let content = "\t::: mermaid\ncontent\n:::\n";
+    let ctx = azure_ctx(content);
+    assert!(
+        ctx.colon_fence_ranges().is_empty(),
+        "tab-indented ::: must not create a colon fence range"
+    );
+    assert!(
+        !ctx.lines[1].in_code_block,
+        "content after tab-indented ::: must not be in_code_block"
+    );
+}
+
+#[test]
+fn test_bare_closer_without_opener_is_not_a_block() {
+    // A bare ::: with no preceding opener must not corrupt state
+    let content = "Some text\n:::\nMore text\n";
+    let ctx = azure_ctx(content);
+    assert!(
+        !ctx.lines[0].in_code_block,
+        "prose before bare ::: must not be in_code_block"
+    );
+    assert!(
+        !ctx.lines[1].in_code_block,
+        "bare ::: without opener must not be in_code_block"
+    );
+    assert!(
+        !ctx.lines[2].in_code_block,
+        "prose after bare ::: must not be in_code_block"
+    );
+}
+
+#[test]
+fn test_leading_spaces_1_2_3_are_valid_openers() {
+    // 0–3 leading spaces are all valid opener indentation levels
+    for spaces in 1..=3usize {
+        let indent = " ".repeat(spaces);
+        let content = format!("{indent}::: mermaid\ncontent\n{indent}:::\n");
+        let ctx = azure_ctx(&content);
+        assert!(
+            ctx.lines[0].in_code_block,
+            "{spaces}-space indent: opener must be in_code_block"
+        );
+        assert!(
+            ctx.lines[1].in_code_block,
+            "{spaces}-space indent: content must be in_code_block"
+        );
+        assert!(
+            ctx.lines[2].in_code_block,
+            "{spaces}-space indent: closer must be in_code_block"
+        );
+    }
+}
+
+#[test]
+fn test_four_leading_spaces_is_not_a_colon_fence() {
+    // 4 leading spaces disqualifies the opener (CommonMark indented code block rules).
+    // pulldown-cmark may mark the 4-space line itself as in_code_block, but no colon
+    // fence range should be created and the subsequent content line must not be in_code_block.
+    let content = "    ::: mermaid\ncontent\n:::\n";
+    let ctx = azure_ctx(content);
+    assert!(
+        ctx.colon_fence_ranges().is_empty(),
+        "4-space indent: must not create a colon fence range"
+    );
+    assert!(
+        !ctx.lines[1].in_code_block,
+        "4-space indent: following content must not be in_code_block"
+    );
+}
