@@ -91,7 +91,13 @@ impl MD048CodeFenceStyle {
         let mut opening_fence_char = '`';
         let mut opening_fence_len = 0usize;
 
-        for line in ctx.content.lines() {
+        for (i, line) in ctx.content.lines().enumerate() {
+            // Skip lines inside Azure DevOps colon code fences — they are
+            // opaque content and must not influence backtick/tilde style detection.
+            if ctx.flavor.supports_colon_code_fences() && ctx.lines.get(i).is_some_and(|li| li.in_code_block) {
+                continue;
+            }
+
             let Some(marker) = parse_fence_marker(line) else {
                 continue;
             };
@@ -205,6 +211,11 @@ impl Rule for MD048CodeFenceStyle {
         let mut needs_lengthening = false;
 
         for (line_num, &line) in lines.iter().enumerate() {
+            // Skip lines inside Azure DevOps colon code fences.
+            if ctx.flavor.supports_colon_code_fences() && ctx.lines.get(line_num).is_some_and(|li| li.in_code_block) {
+                continue;
+            }
+
             let Some(marker) = parse_fence_marker(line) else {
                 continue;
             };

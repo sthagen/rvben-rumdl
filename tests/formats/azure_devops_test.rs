@@ -71,3 +71,19 @@ fn test_md046_colon_fence_with_inner_backtick_not_counted() {
         "MD046 should not flag colon fence content: {warnings:?}"
     );
 }
+
+#[test]
+fn test_md048_colon_fence_with_inner_backtick_not_counted() {
+    use rumdl_lib::rules::CodeFenceStyle;
+    use rumdl_lib::rules::MD048CodeFenceStyle;
+    // ::: block containing ``` inside should not affect MD048 style detection
+    let content = "::: mermaid\n```\ncontent\n```\n:::\n\n~~~rust\nfn main() {}\n~~~\n";
+    let ctx = azure_ctx(content);
+    let rule = MD048CodeFenceStyle::new(CodeFenceStyle::Consistent);
+    let warnings = rule.check(&ctx).unwrap();
+    // The only real fence is ~~~rust — no inconsistency, no warning
+    assert!(
+        warnings.is_empty(),
+        "MD048 should not flag colon fence content: {warnings:?}"
+    );
+}
