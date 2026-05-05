@@ -87,6 +87,7 @@ pub struct LintContext<'a> {
     mdx_comment_ranges: Vec<(usize, usize)>, // Pre-computed MDX comment ranges ({/* ... */})
     citation_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto citation ranges (@key, [@key])
     pandoc_div_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc/Quarto div block ranges (::: ... :::)
+    colon_fence_ranges: Vec<(usize, usize)>, // Pre-computed Azure DevOps colon code fence ranges (:::lang ... :::)
     inline_footnote_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc inline footnote ranges (^[...])
     pandoc_header_slugs: std::collections::HashSet<String>, // Pre-computed Pandoc implicit header reference slugs
     example_list_marker_ranges: Vec<crate::utils::skip_context::ByteRange>, // Pre-computed Pandoc example-list marker ranges (@) / (@label)
@@ -149,13 +150,15 @@ impl<'a> LintContext<'a> {
         );
 
         // Pre-compute autodoc block ranges (avoids O(n^2) scaling)
-        // Detected for all flavors: `:::` blocks are structurally unique and should
-        // never be reflowed as prose, even without MkDocs flavor.
-        let autodoc_ranges = profile_section!(
-            "Autodoc block ranges",
-            profile,
-            crate::utils::mkdocstrings_refs::detect_autodoc_block_ranges(content)
-        );
+        // Detected for all flavors except AzureDevOps, where `:::` denotes code fences
+        // rather than autodoc directives.
+        let autodoc_ranges = profile_section!("Autodoc block ranges", profile, {
+            if flavor.supports_colon_code_fences() {
+                Vec::new()
+            } else {
+                crate::utils::mkdocstrings_refs::detect_autodoc_block_ranges(content)
+            }
+        });
 
         // Pre-compute Pandoc/Quarto div block ranges for Pandoc-compatible flavors
         let pandoc_div_ranges = profile_section!("Pandoc div ranges", profile, {
@@ -354,6 +357,18 @@ impl<'a> LintContext<'a> {
                 }
             }
             code_blocks = new_code_blocks;
+        }
+
+        // Detect Azure DevOps colon code fences and extend code_blocks so that
+        // all byte-range consumers correctly skip their content.
+        let colon_fence_ranges = profile_section!(
+            "Azure colon fence detection",
+            profile,
+            flavor_detection::detect_azure_colon_fences(content, &mut lines, flavor)
+        );
+        if !colon_fence_ranges.is_empty() {
+            code_blocks.extend(colon_fence_ranges.iter().copied());
+            code_blocks.sort_by_key(|&(start, _)| start);
         }
 
         // Detect kramdown constructs (extension blocks, IALs, ALDs) in kramdown flavor
@@ -754,6 +769,7 @@ impl<'a> LintContext<'a> {
             mdx_comment_ranges,
             citation_ranges,
             pandoc_div_ranges,
+            colon_fence_ranges,
             inline_footnote_ranges,
             pandoc_header_slugs,
             example_list_marker_ranges,
@@ -806,6 +822,12 @@ impl<'a> LintContext<'a> {
     /// Get parsed inline configuration state.
     pub fn inline_config(&self) -> &InlineConfig {
         &self.inline_config
+    }
+
+    /// Byte ranges of Azure DevOps colon code fences (`:::lang … :::`).
+    /// Empty for all other flavors.
+    pub fn colon_fence_ranges(&self) -> &[(usize, usize)] {
+        &self.colon_fence_ranges
     }
 
     /// Get pre-split content lines, avoiding repeated `content.lines().collect()` allocations.
