@@ -148,19 +148,18 @@ fn test_multiple_colon_fences_in_document() {
 
 #[test]
 fn test_pandoc_flavor_not_affected() {
-    // In Pandoc flavor, ::: is a fenced div — content is regular Markdown, not a code block.
-    // This contrasts with Azure DevOps where ::: marks opaque code blocks.
-    let content = "::: note\ngraph TD\n:::\n";
-    let ctx = LintContext::new(content, MarkdownFlavor::Pandoc, None);
-    // Content inside Pandoc fenced divs is NOT in_code_block (it's still lintable Markdown)
+    use rumdl_lib::rules::MD013LineLength;
+
+    // In Pandoc flavor, ::: is a fenced div — content is Markdown and is linted as prose.
+    // Use a line with spaces so MD013's single-word exemption doesn't apply.
+    let long_line = "word ".repeat(30); // 150 chars with spaces
+    let content = format!("::: note\n{long_line}\n:::\n");
+    let ctx = LintContext::new(&content, MarkdownFlavor::Pandoc, None);
+    let rule = MD013LineLength::default();
+    let warnings = rule.check(&ctx).unwrap();
     assert!(
-        !ctx.lines[1].in_code_block,
-        "Pandoc: fenced div content must not be in_code_block"
-    );
-    // The ::: opener in Pandoc flavor should also not be in_code_block
-    assert!(
-        !ctx.lines[0].in_code_block,
-        "Pandoc: fenced div opener must not be in_code_block"
+        !warnings.is_empty(),
+        "Pandoc flavor: MD013 must fire inside fenced div — content is not suppressed"
     );
 }
 
