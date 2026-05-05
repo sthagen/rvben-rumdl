@@ -1,3 +1,4 @@
+mod azure_devops_test;
 mod crlf_line_endings_test;
 mod definition_list_reflow_test;
 mod kramdown_integration_test;
