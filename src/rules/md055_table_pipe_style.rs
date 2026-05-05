@@ -445,6 +445,104 @@ impl Rule for MD055TablePipeStyle {
 mod tests {
     use super::*;
 
+    // === Issue #611: kebab-case config values ignored, fallback to leading-and-trailing ===
+    //
+    // All style names must work identically whether the user writes kebab-case
+    // (no-leading-or-trailing) or snake_case (no_leading_or_trailing) in config.
+
+    fn rule_from_toml_style(style: &str) -> MD055TablePipeStyle {
+        let config: md055_config::MD055Config =
+            toml::from_str(&format!("style = \"{style}\"")).expect("valid style value");
+        MD055TablePipeStyle::from_config_struct(config)
+    }
+
+    #[test]
+    fn test_no_leading_or_trailing_kebab_accepts_conforming_table() {
+        let rule = rule_from_toml_style("no-leading-or-trailing");
+        let content = "A | B\n--- | ---\n1 | 2";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "no-leading-or-trailing should accept a table with no pipes: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_leading_or_trailing_kebab_rejects_nonconforming_table() {
+        let rule = rule_from_toml_style("no-leading-or-trailing");
+        let content = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert_eq!(
+            warnings.len(),
+            3,
+            "no-leading-or-trailing should flag all 3 rows with pipes"
+        );
+        assert!(warnings.iter().all(|w| w.message.contains("no leading or trailing")));
+    }
+
+    #[test]
+    fn test_leading_only_kebab_accepts_conforming_table() {
+        let rule = rule_from_toml_style("leading-only");
+        let content = "| A | B\n|---|---\n| 1 | 2";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "leading-only should accept a leading-only table: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_trailing_only_kebab_accepts_conforming_table() {
+        let rule = rule_from_toml_style("trailing-only");
+        let content = "A | B |\n---|--- |\n1 | 2 |";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "trailing-only should accept a trailing-only table: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_leading_and_trailing_kebab_accepts_conforming_table() {
+        let rule = rule_from_toml_style("leading-and-trailing");
+        let content = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+        let warnings = rule.check(&ctx).unwrap();
+        assert!(
+            warnings.is_empty(),
+            "leading-and-trailing should accept a fully-piped table: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_kebab_and_snake_case_styles_are_equivalent() {
+        // For every style, kebab and snake_case forms must produce identical warnings.
+        let pairs = [
+            ("no-leading-or-trailing", "no_leading_or_trailing"),
+            ("leading-only", "leading_only"),
+            ("trailing-only", "trailing_only"),
+            ("leading-and-trailing", "leading_and_trailing"),
+        ];
+        let content = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let ctx = crate::lint_context::LintContext::new(content, crate::config::MarkdownFlavor::Standard, None);
+
+        for (kebab, snake) in pairs {
+            let kebab_rule = rule_from_toml_style(kebab);
+            let snake_rule = rule_from_toml_style(snake);
+            let kebab_warnings = kebab_rule.check(&ctx).unwrap();
+            let snake_warnings = snake_rule.check(&ctx).unwrap();
+            assert_eq!(
+                kebab_warnings.len(),
+                snake_warnings.len(),
+                "'{kebab}' and '{snake}' must produce the same number of warnings"
+            );
+        }
+    }
+
     #[test]
     fn test_md055_delimiter_row_handling() {
         // Test with no_leading_or_trailing style
